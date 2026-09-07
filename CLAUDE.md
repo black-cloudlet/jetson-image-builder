@@ -128,10 +128,14 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   else yet; the Kubernetes layer is the next addition.
 - `config.toml` — bib config with a **custom kickstart** (bib then adds only `ostreecontainer`;
   `[customizations.user]`/`filesystem` cannot be combined with a custom kickstart, so
-  everything lives in the kickstart): `text --non-interactive`, DHCP on link, `ignoredisk
-  --only-use=nvme0n1`, `clearpart --all` + `autopart --noswap --type=plain --fstype=xfs`,
-  root locked, user `edge` in `wheel` from `@EDGE_SSH_PUBKEY@` / `@EDGE_PASSWORD_HASH@`
-  placeholders, `reboot --eject`. ISO label `JETSON_ORIN_BOOTC`.
+  everything lives in the kickstart): `text --non-interactive`, `timezone Asia/Jerusalem --utc`,
+  static `192.168.1.10/24` gw `192.168.1.1` on link with `--hostname=Jetson`, `ignoredisk
+  --only-use=nvme0n1`, `clearpart --all` + `reqpart --add-boot` + `part / --grow --fstype=xfs`
+  + `part swap --recommended`, root locked, user `edge` in `wheel` from `@EDGE_SSH_PUBKEY@` /
+  `@EDGE_PASSWORD_HASH@` placeholders, `reboot --eject`. ISO label `JETSON_ORIN_BOOTC`.
+  The static address and hostname are baked into the ISO: two devices imaged from the same ISO
+  collide on one segment. `--nameserver` is deliberately absent — the network is air-gapped and
+  there is no resolver to point at.
 - `.github/workflows/build-bootc.yml` — job `image` on `ubuntu-24.04-arm`: build, smoke test
   (`bootc --version`, `/etc/nv_tegra_release`, `rpm -q` kmod + toolkit-base, `nvgpu.ko`
   present), push `ghcr.io/<owner>/jetson-orin-bootc:<YYYYMMDD-sha8>` + `latest`. Job `iso`:

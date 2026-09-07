@@ -7,14 +7,19 @@ contents = """
 text --non-interactive
 lang en_US.UTF-8
 keyboard us
-timezone UTC --utc
-network --bootproto=dhcp --device=link --activate --onboot=on
+timezone Asia/Jerusalem --utc
+
+# Static: every device imaged from this ISO comes up on 192.168.1.10 as `Jetson`.
+# Two of them on one segment will collide — re-image or fix up per device before adding a second.
+network --bootproto=static --ip=192.168.1.10 --netmask=255.255.255.0 --gateway=192.168.1.1 --device=link --onboot=on --activate --hostname=Jetson
 
 # Install to the NVMe only; never touch the USB key the installer booted from or the eMMC.
 ignoredisk --only-use=nvme0n1
 zerombr
 clearpart --all --initlabel --disklabel=gpt
-autopart --noswap --type=plain --fstype=xfs
+reqpart --add-boot
+part / --grow --fstype=xfs
+part swap --recommended
 
 rootpw --lock
 user --name=edge --groups=wheel --iscrypted --password=@EDGE_PASSWORD_HASH@

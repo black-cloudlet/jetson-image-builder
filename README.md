@@ -37,10 +37,15 @@ The kickstart in `config.toml` is fully unattended: it wipes `nvme0n1` only (the
 eMMC are ignored), creates `edge` in `wheel`, locks root, and reboots ejecting the media.
 Booting it on a device with data on the NVMe is destructive.
 
+The network is **static**: the device comes up as `Jetson` on `192.168.1.10/24` via
+`192.168.1.1`. Every device imaged from a given ISO gets that same address and hostname, so a
+second node on the same segment collides — change them here and rebuild, or fix up per device
+after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UTC.
+
 1. Flash QSPI on the station from a **R36.5.x** BSP (same L4T line as the image):
    `sudo ./flash.sh p3737-0000-p3701-0000-qspi external`
 2. `dd` the ISO to a USB key, plug it in with the NVMe fitted, ESC at the NVIDIA logo, pick USB.
-3. Wait for the reboot, then over serial (`ttyTCU0`) or ssh:
+3. Wait for the reboot, then over serial (`ttyTCU0`) or `ssh edge@192.168.1.10`:
    ```
    bootc status
    cat /etc/nv_tegra_release
