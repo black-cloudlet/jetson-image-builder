@@ -95,8 +95,16 @@ Target stack on the device:
 5. **BSP revision must match the base image's L4T line.** The image is L4T **r36.5.0**, so the
    QSPI must be flashed from a Jetson Linux **R36.5.x** BSP (the staged R36.5.2 is fine).
    Do not flash from r36.4.x — mismatched UEFI/firmware vs. modules causes boot hangs.
-6. **Builds run in GitHub Actions on `ubuntu-24.04-arm`** for native aarch64; images are pushed
-   to GHCR, then mirrored into the air-gapped registry by hand.
+6. **Builds run in GitHub Actions on `ubuntu-24.04-arm`, inside a UBI 9 container.** GitHub
+   offers no RHEL-hosted runner, so the runner label buys the architecture (native aarch64; qemu
+   emulation of an arm64 `dnf`/`skopeo` build is not viable) and the `container:` buys the
+   distro. podman/buildah/skopeo come from RHEL rather than Ubuntu's archive, and
+   `subscription-manager register` inside the container supplies entitlement. Images are pushed
+   to GHCR, then mirrored into the air-gapped registry by hand. Pattern taken from
+   `redhat-et/edge-ai-image-pipelines` (Apache-2.0), which builds Tegra bootc images the same
+   way. The runner's `/dev/nvme0n1` scratch disk is formatted and `/var/lib/containers`,
+   `/var/tmp` and the ISO output are moved onto it — ~10 GB of embedded images plus a
+   multi-gigabyte ISO does not fit in the job container's writable layer.
 7. **NVIDIA BSP download stays manual** and is documented in `README.md`. Scripting it was tried;
    NVIDIA's version-string and URL-path (`release/` vs `releases/`) inconsistencies made it fragile.
 
@@ -129,13 +137,26 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   (`firewalld jq microshift microshift-release-info`), the mandatory firewall rules, the
   `microshift-make-rshared.service` OVN needs, and every MicroShift container image embedded
   into `/usr/lib/containers/storage` with a `microshift.service.d` drop-in that copies them
-  into CRI-O storage before the service starts. Embedding follows Red Hat's
-  `packaging/imagemode/Containerfile-embedded.repobase` — images are copied into the main
-  store rather than referenced as an additional store, because an image upgrade overwrites an
-  additional store (RHEL-75827). **No `dnf upgrade`**: Red Hat's own file runs one, but here it
-  could pull a kernel past 5.14.0-687.42.1 and the Tegra kmod is built against that exact
-  build. `--enablerepo` rather than `dnf config-manager`, so the build does not depend on
-  dnf-plugins-core being in the base.
+  into containers-storage before the service starts, plus the NVIDIA device plugin
+  (`nvidia-ctk runtime configure --runtime=crio`, the plugin manifest and a kustomization in
+  `/etc/microshift/manifests`, and the plugin image embedded alongside MicroShift's).
+  Images are copied into the main store rather than referenced as an additional store, because
+  an image upgrade overwrites an additional store (RHEL-75827). **No `dnf upgrade`**: Red Hat's
+  own file runs one, but here it could pull a kernel past 5.14.0-687.42.1 and the Tegra kmod is
+  built against that exact build. `--enablerepo` rather than `dnf config-manager`, so the build
+  does not depend on dnf-plugins-core being in the base. No Containerfile heredocs — everything
+  is `printf` or `COPY`, so the build does not depend on the builder's podman being new enough
+  to parse `RUN <<EOF`.
+- `physically-bound-images/{embed_image.sh,copy_embedded_images.sh}` — adapted from
+  `redhat-et/edge-ai-image-pipelines` (Apache-2.0). Cache is `/usr/lib/containers-image-cache`
+  with a `mapping.txt` of reference -> sha, replayed once per boot by
+  `copy-embedded-images.service` (a standalone oneshot, with `Requires=`/`After=` on
+  microshift.service, rather than Red Hat's `ExecStartPre=` — it runs once per boot instead of
+  on every MicroShift restart, and later app images share the one mechanism). `embed_image.sh`
+  splits `$REPO:$TAG@sha256:$SHA` references, which skopeo rejects and Red Hat's own recipe does
+  not handle. The unit deliberately does **not** want `network-online.target`: the copy is
+  local-disk only and waiting for a carrier that never comes would add
+  NetworkManager-wait-online's timeout to every boot.
 - `config.toml` — bib config with a **custom kickstart** (bib then adds only `ostreecontainer`;
   `[customizations.user]`/`filesystem` cannot be combined with a custom kickstart, so
   everything lives in the kickstart): `text --non-interactive`, `timezone Asia/Jerusalem --utc`,
@@ -159,16 +180,16 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso` with
   `/etc/pki/entitlement` and `/etc/rhsm` bind-mounted, upload `*.iso` + `SHA256SUMS`.
 
-Secrets: `RH_REGISTRY_USER`, `RH_REGISTRY_TOKEN` (bib image pull), `RHSM_ENTITLEMENT_TGZ_B64`
-(`tar -C / -czf - etc/pki/entitlement etc/rhsm etc/yum.repos.d/redhat.repo | base64 -w0` from a
-subscribed RHEL host — now consumed by **both** jobs: the image build needs the MicroShift RPMs
-and bib must depsolve Anaconda), `OPENSHIFT_PULL_SECRET` (pulls MicroShift's container images at
-build time; never written into the OS image), `EDGE_SSH_PUBKEY`, `EDGE_PASSWORD_HASH`
-(`openssl passwd -6`). `redhat.repo` must be in the entitlement tarball or the rhocp and
-fast-datapath repos are undefined and `--enablerepo` has nothing to enable; the workflow fails
-loudly on that. The subscription must also carry an OpenShift entitlement or those repos never
-appear. `RHSM_ORG`/`RHSM_ACTIVATION_KEY` remain unused — entitlement comes from the tarball.
-A self-hosted registered RHEL 9 aarch64 runner would remove the entitlement secret.
+Secrets: `RH_REGISTRY_USER`, `RH_REGISTRY_TOKEN` (bib image pull), `RHT_ORGID`/`RHT_ACT_KEY`
+(both jobs `subscription-manager register` inside the UBI builder, and unregister in an
+`if: always()` step), `OPENSHIFT_PULL_SECRET` (pulls MicroShift's and the device plugin's
+container images at build time; never written into the OS image), `EDGE_SSH_PUBKEY`,
+`EDGE_PASSWORD_HASH` (`openssl passwd -6`). The entitlement-certificate tarball
+(`RHSM_ENTITLEMENT_TGZ_B64`) was replaced by activation-key registration: nothing expires inside
+a secret and `redhat.repo` is generated fresh by the registration. Cost is a subscription slot
+per run. The subscription must carry an OpenShift entitlement or
+`rhocp-4.20-for-rhel-9-aarch64-rpms` never appears and the build fails at `--enablerepo`.
+A self-hosted registered RHEL 9 aarch64 runner would remove the registration step too.
 
 Notes on bib: upstream `bootc-image-builder` was merged into `osbuild/image-builder`, but
 `registry.redhat.io/rhel9/bootc-image-builder` remains the supported path for RHEL content and
@@ -184,10 +205,11 @@ needs NVMe/USB/NIC, and the deployed image brings its own kernel.
 2. Same boot, confirm MicroShift: `systemctl status microshift`, `oc get pods -A` all running
    with no registry reachable (that is what the embedding buys), `vgs` showing free extents in
    VG `rhel`, and a PVC binding against the topolvm storage class.
-3. Add the NVIDIA device plugin via CDI so pods can request `nvidia.com/gpu`, then the bound app
-   images (PostgreSQL, RabbitMQ, KServe, the model server) by the same embedding mechanism the
-   MicroShift images already use.
-4. Verify a GPU pod schedules and KServe answers an inference request with no network attached.
+3. Confirm the device plugin: `oc get ds -n kube-system nvidia-device-plugin-daemonset` and
+   `nvidia.com/gpu` in the node's allocatable resources.
+4. Add the bound app images (PostgreSQL, RabbitMQ, KServe, the model server) through
+   `embed_image.sh`, and their manifests to `/etc/microshift/manifests/kustomization.yaml`.
+5. Verify a GPU pod schedules and KServe answers an inference request with no network attached.
 4. Later layers (separate Containerfiles `FROM` the k8s image, not this one): `bootc switch`
    unit pointing at the air-gapped registry, greenboot health checks, image signature policy in
    `/etc/containers/policy.json`.

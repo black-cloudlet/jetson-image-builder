@@ -11,7 +11,8 @@ runner, pushes it to `ghcr.io/black-cloudlet/jetson-orin-bootc:<YYYYMMDD-sha8>`,
 
 | File | Does |
 | ---- | ---- |
-| `Containerfile` | pinned JetPack-for-RHEL base + MicroShift 4.20 + embedded container images |
+| `Containerfile` | pinned JetPack-for-RHEL base + MicroShift 4.20 + NVIDIA device plugin + embedded images |
+| `physically-bound-images/` | embed images at build time, replay them into containers-storage at boot |
 | `config.toml` | bootc-image-builder config — the unattended kickstart and the ISO label |
 | `.github/workflows/build-bootc.yml` | build + smoke test + push to GHCR, then build the ISO |
 
@@ -25,16 +26,16 @@ L4T line as the image built here — before a device can boot this ISO.
 | secret | purpose |
 |---|---|
 | `RH_REGISTRY_USER` / `RH_REGISTRY_TOKEN` | pull `registry.redhat.io/rhel9/bootc-image-builder` (Registry Service Account) |
-| `RHSM_ENTITLEMENT_TGZ_B64` | `tar -C / -czf - etc/pki/entitlement etc/rhsm etc/yum.repos.d/redhat.repo \| base64 -w0` on a subscribed RHEL host — the MicroShift RPMs and bib's Anaconda depsolve both need it |
-| `OPENSHIFT_PULL_SECRET` | pull secret JSON from console.redhat.com/openshift/install/pull-secret — pulls MicroShift's container images at build time |
+| `RHT_ORGID` / `RHT_ACT_KEY` | organisation ID and activation key — both jobs register with subscription-manager for the MicroShift RPMs and bib's Anaconda depsolve |
+| `OPENSHIFT_PULL_SECRET` | pull secret JSON from console.redhat.com/openshift/install/pull-secret — pulls MicroShift's and the device plugin's container images at build time |
 | `EDGE_SSH_PUBKEY` | public key for the `edge` user |
 | `EDGE_PASSWORD_HASH` | `openssl passwd -6` output for the `edge` user |
 
-`redhat.repo` is what defines the `rhocp-4.20-for-rhel-9-aarch64-rpms` and
-`fast-datapath-for-rhel-9-aarch64-rpms` repos. An entitlement tarball built without it will fail
-the build with a clear error — if you created the secret before MicroShift was added, regenerate
-it with the command above. The subscription also has to actually carry an OpenShift entitlement,
-or those repos will not appear in `redhat.repo` at all.
+Entitlement comes from registering inside the build container, not from a certificate tarball —
+nothing expires in a secret, and `redhat.repo` is generated fresh by the registration. Each run
+consumes a subscription slot and releases it again in an `if: always()` unregister step. The
+subscription has to carry an OpenShift entitlement or `rhocp-4.20-for-rhel-9-aarch64-rpms` never
+appears and the build fails at `--enablerepo`.
 
 The pull secret is used only during the build; it is not written into the OS image.
 
@@ -59,18 +60,33 @@ after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UT
    lsmod | grep nvgpu
    systemctl status nvidia-ctk && nvidia-ctk cdi list     # nvidia.com/gpu=all
    ```
-4. Then MicroShift. First boot is slow — `microshift-copy-images` loads every embedded image
-   into CRI-O storage before the service starts, and the cluster settles after that:
+4. Then MicroShift. First boot is slow — `copy-embedded-images.service` replays every embedded
+   image into containers-storage before MicroShift starts, and the cluster settles after that:
    ```
    systemctl status microshift
    export KUBECONFIG=/var/lib/microshift/resources/kubeadmin/kubeconfig
    sudo -E oc get pods -A                 # openshift-ovn-kubernetes, -dns, -service-ca, -storage
    sudo vgs                               # VG rhel, with free extents left for LVMS
    sudo -E oc get sc                      # topolvm provisioner
+   sudo -E oc get ds -n kube-system nvidia-device-plugin-daemonset
+   sudo -E oc get nodes -o jsonpath='{.items[0].status.allocatable}'   # expect nvidia.com/gpu
    ```
    Pods stuck in `ImagePullBackOff` mean the embedding did not take — check
-   `/usr/lib/containers/storage/image-list.txt` and the `microshift-copy-images` run in
-   `journalctl -u microshift`.
+   `/usr/lib/containers-image-cache/mapping.txt` and
+   `journalctl -u copy-embedded-images`.
+
+## Where the build runs
+
+`runs-on: ubuntu-24.04-arm` for a native arm64 machine, but every step executes inside
+`registry.access.redhat.com/ubi9/ubi`: podman, buildah and skopeo come from RHEL rather than
+Ubuntu's archive, and `subscription-manager register` inside that container supplies entitlement.
+GitHub offers no RHEL-hosted runner, so this is the closest thing to building on RHEL without
+standing up a self-hosted machine.
+
+The runner's scratch disk (`/dev/nvme0n1`) is formatted and `/var/lib/containers`, `/var/tmp` and
+the ISO output directory are moved onto it. Roughly 10 GB of embedded container images plus a
+multi-gigabyte ISO does not fit in the container's default writable layer. If that device is
+already mounted the step warns and continues rather than reformatting something in use.
 
 ## Storage layout
 
@@ -84,13 +100,11 @@ filesystem needs to be bigger.
 ## Local build (subscribed RHEL 9 aarch64 host)
 
 The container build now needs entitlement and a pull secret, so it no longer works on an
-unsubscribed host:
+unsubscribed host. On a registered host podman injects the entitlement itself, so only the pull
+secret has to be passed:
 
 ```
 sudo podman build \
-  -v /etc/pki/entitlement:/etc/pki/entitlement:ro \
-  -v /etc/rhsm:/etc/rhsm:ro \
-  -v /etc/yum.repos.d/redhat.repo:/etc/yum.repos.d/redhat.repo:ro \
   --secret id=pullsecret,src=$HOME/pull-secret.json \
   -t localhost/jetson-orin-bootc:dev .
 sed -e "s|@EDGE_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \

@@ -3,48 +3,76 @@ name: bootc image + installer ISO
 on:
   push:
     branches: [main]
-    paths: [Containerfile, config.toml, .github/workflows/build-bootc.yml]
+    paths:
+      - Containerfile
+      - config.toml
+      - physically-bound-images/**
+      - .github/workflows/build-bootc.yml
   workflow_dispatch:
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/jetson-orin-bootc
 
+# Both jobs run on an Ubuntu runner but do all their work inside a UBI
+# container: podman/buildah/skopeo come from RHEL rather than Ubuntu's archive,
+# and `subscription-manager register` inside the container gives entitlement for
+# the MicroShift RPMs and bib's Anaconda depsolve. Pattern from
+# redhat-et/edge-ai-image-pipelines (Apache-2.0).
+#
+# --device /dev/nvme0n1 is the runner's scratch disk. Embedding ~10 GB of
+# container images and then building an ISO does not fit in the container's
+# default writable layer, so /var/lib/containers and /var/tmp are moved onto it.
+
 jobs:
-  # 1. Build the derived image natively on arm64 and push it to GHCR.
-  #    The base on quay.io is public, but the MicroShift RPMs come from
-  #    entitlement-gated repos and its container images come from
-  #    registry.redhat.io, so this job now needs both the RHSM entitlement and
-  #    an OpenShift pull secret.
   image:
     runs-on: ubuntu-24.04-arm
     permissions: { contents: read, packages: write }
+    container:
+      image: registry.access.redhat.com/ubi9/ubi
+      options: --privileged --device /dev/nvme0n1
+    env:
+      # Use this container's own registration, not the (unsubscribed) host's.
+      SMDEV_CONTAINER_OFF: 1
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install podman
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq podman
+      - name: Container tools
+        run: dnf -y install podman buildah skopeo jq
+
+      # UBI's default policy demands signatures for registry.redhat.io content.
+      - name: Relax image signature policy in the builder
+        run: |
+          jq 'del(.transports)' /etc/containers/policy.json > /tmp/policy.json
+          mv /tmp/policy.json /etc/containers/policy.json
+
+      - name: Register with Red Hat
+        run: subscription-manager register --org="${{ secrets.RHT_ORGID }}" --activationkey="${{ secrets.RHT_ACT_KEY }}"
+
+      - name: Move container storage onto the scratch disk
+        run: |
+          if findmnt -S /dev/nvme0n1 >/dev/null 2>&1; then
+            echo "::warning::/dev/nvme0n1 already mounted; leaving it alone. The build may run out of space."
+            exit 0
+          fi
+          dnf -y install xfsprogs
+          mkfs.xfs -f /dev/nvme0n1
+          mkdir -p /var/mnt && mount /dev/nvme0n1 /var/mnt
+          mkdir -p /var/mnt/containers /var/mnt/tmp /var/lib/containers /var/tmp
+          mount --bind /var/mnt/containers /var/lib/containers
+          mount --bind /var/mnt/tmp /var/tmp
+          df -h /var/lib/containers /var/tmp
 
       - name: Compute tag
         id: meta
         run: echo "tag=$(date -u +%Y%m%d)-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
 
       - name: Login GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      # Provides /etc/pki/entitlement, /etc/rhsm and /etc/yum.repos.d/redhat.repo.
-      # redhat.repo is what defines the rhocp and fast-datapath repos, so the
-      # secret must be built with it included:
-      #   tar -C / -czf - etc/pki/entitlement etc/rhsm etc/yum.repos.d/redhat.repo | base64 -w0
-      - name: Restore RHSM entitlement
-        run: |
-          echo "${{ secrets.RHSM_ENTITLEMENT_TGZ_B64 }}" | base64 -d | sudo tar -C / -xzf -
-          test -s /etc/yum.repos.d/redhat.repo \
-            || { echo "::error::redhat.repo missing from RHSM_ENTITLEMENT_TGZ_B64 - regenerate the secret including etc/yum.repos.d/redhat.repo"; exit 1; }
-
-      # Used only to pull MicroShift's container images at build time; it is not
-      # baked into the OS image.
+      # Pulls MicroShift's and the device plugin's images at build time; never
+      # written into the OS image.
       - name: Write pull secret
         env:
           PULL_SECRET: ${{ secrets.OPENSHIFT_PULL_SECRET }}
@@ -56,16 +84,14 @@ jobs:
 
       - name: Build
         run: |
-          sudo podman build \
-            -v /etc/pki/entitlement:/etc/pki/entitlement:ro \
-            -v /etc/rhsm:/etc/rhsm:ro \
-            -v /etc/yum.repos.d/redhat.repo:/etc/yum.repos.d/redhat.repo:ro \
+          podman build \
             --secret id=pullsecret,src=/tmp/pull-secret.json \
             -t "$IMAGE:${{ steps.meta.outputs.tag }}" -t "$IMAGE:latest" -f Containerfile .
 
       - name: Smoke test
         run: |
-          sudo podman run --rm "$IMAGE:${{ steps.meta.outputs.tag }}" bash -c '
+          podman run --rm "$IMAGE:${{ steps.meta.outputs.tag }}" bash -c '
+            set -eu
             bootc --version
             cat /etc/nv_tegra_release
             rpm -q nvidia-jetpack-for-rhel-9.8-kmod nvidia-container-toolkit-base
@@ -73,37 +99,71 @@ jobs:
             rpm -q microshift microshift-release-info
             test -L /etc/systemd/system/multi-user.target.wants/microshift.service
             test -L /etc/systemd/system/multi-user.target.wants/microshift-make-rshared.service
-            test -s /usr/lib/containers/storage/image-list.txt
-            echo "embedded images: $(wc -l < /usr/lib/containers/storage/image-list.txt)"
+            test -L /etc/systemd/system/multi-user.target.wants/copy-embedded-images.service
+            test -s /etc/microshift/manifests/nvidia-device-plugin.yml
+            test -s /etc/microshift/manifests/kustomization.yaml
+            test -f /etc/crio/crio.conf.d/99-nvidia.conf
+            test -s /usr/lib/containers-image-cache/mapping.txt
+            echo "embedded images: $(wc -l < /usr/lib/containers-image-cache/mapping.txt)"
             while IFS=, read -r img sha; do
-              test -f "/usr/lib/containers/storage/${sha}/manifest.json" \
+              test -f "/usr/lib/containers-image-cache/${sha}/manifest.json" \
                 || { echo "missing embedded image: ${img}"; exit 1; }
-            done < /usr/lib/containers/storage/image-list.txt'
+            done < /usr/lib/containers-image-cache/mapping.txt
+            grep -q nvidia /usr/lib/containers-image-cache/mapping.txt'
 
       - name: Push
-        run: sudo podman push "$IMAGE:${{ steps.meta.outputs.tag }}" && sudo podman push "$IMAGE:latest"
+        run: podman push "$IMAGE:${{ steps.meta.outputs.tag }}" && podman push "$IMAGE:latest"
 
-  # 2. Turn the pushed image into an unattended Anaconda installer ISO.
-  #    anaconda-iso depsolves Anaconda from RHEL repos, so the Red Hat bib image needs
-  #    entitlement certs from a subscribed RHEL host:
-  #      tar -C / -czf - etc/pki/entitlement etc/rhsm | base64 -w0   -> secret RHSM_ENTITLEMENT_TGZ_B64
+      - name: Unregister
+        if: always()
+        run: subscription-manager unregister || true
+
+  # Turn the pushed image into an unattended Anaconda installer ISO. bib runs
+  # nested inside the UBI builder, so it needs --privileged and, unlike on an
+  # Ubuntu host, the SELinux opt-out.
   iso:
     needs: image
     runs-on: ubuntu-24.04-arm
     permissions: { contents: read, packages: read }
+    container:
+      image: registry.access.redhat.com/ubi9/ubi
+      options: --privileged --device /dev/nvme0n1
+    env:
+      SMDEV_CONTAINER_OFF: 1
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install podman
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq podman
+      - name: Container tools
+        run: dnf -y install podman skopeo jq
+
+      - name: Relax image signature policy in the builder
+        run: |
+          jq 'del(.transports)' /etc/containers/policy.json > /tmp/policy.json
+          mv /tmp/policy.json /etc/containers/policy.json
+
+      - name: Register with Red Hat
+        run: subscription-manager register --org="${{ secrets.RHT_ORGID }}" --activationkey="${{ secrets.RHT_ACT_KEY }}"
+
+      - name: Move container storage and ISO output onto the scratch disk
+        run: |
+          if findmnt -S /dev/nvme0n1 >/dev/null 2>&1; then
+            echo "::warning::/dev/nvme0n1 already mounted; leaving it alone. The build may run out of space."
+            mkdir -p output
+            exit 0
+          fi
+          dnf -y install xfsprogs
+          mkfs.xfs -f /dev/nvme0n1
+          mkdir -p /var/mnt && mount /dev/nvme0n1 /var/mnt
+          mkdir -p /var/mnt/containers /var/mnt/tmp /var/mnt/output /var/lib/containers /var/tmp output
+          mount --bind /var/mnt/containers /var/lib/containers
+          mount --bind /var/mnt/tmp /var/tmp
+          mount --bind /var/mnt/output output
+          df -h /var/lib/containers /var/tmp output
 
       - name: Logins
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}"     | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
-          echo "${{ secrets.RH_REGISTRY_TOKEN }}" | sudo podman login registry.redhat.io -u "${{ secrets.RH_REGISTRY_USER }}" --password-stdin
-
-      - name: Restore RHSM entitlement
-        run: echo "${{ secrets.RHSM_ENTITLEMENT_TGZ_B64 }}" | base64 -d | sudo tar -C / -xzf -
+          echo "${{ secrets.GITHUB_TOKEN }}"      | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "${{ secrets.RH_REGISTRY_TOKEN }}" | podman login registry.redhat.io -u "${{ secrets.RH_REGISTRY_USER }}" --password-stdin
 
       - name: Render config.toml
         run: |
@@ -113,19 +173,17 @@ jobs:
 
       - name: Build ISO
         run: |
-          sudo podman pull "$IMAGE:${{ needs.image.outputs.tag }}"
-          mkdir output
-          sudo podman run --rm --privileged --pull=newer \
+          podman pull "$IMAGE:${{ needs.image.outputs.tag }}"
+          podman run --rm --privileged --pull=newer \
+            --security-opt label=type:unconfined_t \
             -v /tmp/config.toml:/config.toml:ro \
             -v ./output:/output \
             -v /var/lib/containers/storage:/var/lib/containers/storage \
-            -v /etc/pki/entitlement:/etc/pki/entitlement:ro \
-            -v /etc/rhsm:/etc/rhsm:ro \
             registry.redhat.io/rhel9/bootc-image-builder:latest \
             --type anaconda-iso --config /config.toml \
             "$IMAGE:${{ needs.image.outputs.tag }}"
-          sudo mv output/bootiso/install.iso "output/jetson-orin-bootc-${{ needs.image.outputs.tag }}.iso"
-          (cd output && sha256sum *.iso | sudo tee SHA256SUMS)
+          mv output/bootiso/install.iso "output/jetson-orin-bootc-${{ needs.image.outputs.tag }}.iso"
+          (cd output && sha256sum ./*.iso > SHA256SUMS)
 
       - uses: actions/upload-artifact@v4
         with:
@@ -135,3 +193,7 @@ jobs:
             output/SHA256SUMS
           retention-days: 7
           compression-level: 0
+
+      - name: Unregister
+        if: always()
+        run: subscription-manager unregister || true
