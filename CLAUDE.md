@@ -21,7 +21,7 @@ flashing station ever reaches the internet.
 Target stack on the device:
 
 - RHEL 9.8 image mode (bootc), aarch64
-- Kubernetes: k3s **or** MicroShift — not yet decided
+- Kubernetes: **MicroShift 4.20** (decided; k3s was the alternative and was dropped)
 - App services on the cluster: PostgreSQL, RabbitMQ
 - Inference: KServe serving the image-recognition model
 - All container images physically bound into the OS image (zero network at first boot)
@@ -124,30 +124,50 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
 
 ### bootc image + installer ISO pipeline (`Containerfile`, `config.toml`, `build-bootc.yml`)
 
-- `Containerfile` — `FROM` the pinned JetPack-for-RHEL image + `bootc container lint`. Nothing
-  else yet; the Kubernetes layer is the next addition.
+- `Containerfile` — `FROM` the pinned JetPack-for-RHEL image, then MicroShift 4.20 from
+  `rhocp-4.20-for-rhel-9-aarch64-rpms` + `fast-datapath-for-rhel-9-aarch64-rpms`
+  (`firewalld jq microshift microshift-release-info`), the mandatory firewall rules, the
+  `microshift-make-rshared.service` OVN needs, and every MicroShift container image embedded
+  into `/usr/lib/containers/storage` with a `microshift.service.d` drop-in that copies them
+  into CRI-O storage before the service starts. Embedding follows Red Hat's
+  `packaging/imagemode/Containerfile-embedded.repobase` — images are copied into the main
+  store rather than referenced as an additional store, because an image upgrade overwrites an
+  additional store (RHEL-75827). **No `dnf upgrade`**: Red Hat's own file runs one, but here it
+  could pull a kernel past 5.14.0-687.42.1 and the Tegra kmod is built against that exact
+  build. `--enablerepo` rather than `dnf config-manager`, so the build does not depend on
+  dnf-plugins-core being in the base.
 - `config.toml` — bib config with a **custom kickstart** (bib then adds only `ostreecontainer`;
   `[customizations.user]`/`filesystem` cannot be combined with a custom kickstart, so
   everything lives in the kickstart): `text --non-interactive`, `timezone Asia/Jerusalem --utc`,
   static `192.168.1.10/24` gw `192.168.1.1` on link with `--hostname=Jetson`, `ignoredisk
-  --only-use=nvme0n1`, `clearpart --all` + `reqpart --add-boot` + `part / --grow --fstype=xfs`
-  + `part swap --recommended`, root locked, user `edge` in `wheel` from `@EDGE_SSH_PUBKEY@` /
+  --only-use=nvme0n1`, `clearpart --all` + `reqpart --add-boot` + one VG `rhel` on the rest of
+  the NVMe holding a 60 GiB xfs root and swap, **with the remaining extents left free for
+  MicroShift's LVMS provisioner** (fill the VG and the cluster has no dynamic PV source, so
+  PostgreSQL/RabbitMQ/the model store have nowhere to go; assumes an NVMe ≳80 GiB), root
+  locked, user `edge` in `wheel` from `@EDGE_SSH_PUBKEY@` /
   `@EDGE_PASSWORD_HASH@` placeholders, `reboot --eject`. ISO label `JETSON_ORIN_BOOTC`.
   The static address and hostname are baked into the ISO: two devices imaged from the same ISO
   collide on one segment. `--nameserver` is deliberately absent — the network is air-gapped and
   there is no resolver to point at.
-- `.github/workflows/build-bootc.yml` — job `image` on `ubuntu-24.04-arm`: build, smoke test
-  (`bootc --version`, `/etc/nv_tegra_release`, `rpm -q` kmod + toolkit-base, `nvgpu.ko`
-  present), push `ghcr.io/<owner>/jetson-orin-bootc:<YYYYMMDD-sha8>` + `latest`. Job `iso`:
+- `.github/workflows/build-bootc.yml` — job `image` on `ubuntu-24.04-arm`: restore entitlement
+  (now needed here too, for the MicroShift RPMs), write the pull secret, build with the
+  entitlement bind-mounted and the pull secret as a build secret, smoke test (`bootc --version`,
+  `/etc/nv_tegra_release`, `rpm -q` kmod + toolkit-base, `nvgpu.ko` present, `rpm -q microshift`,
+  `systemctl is-enabled microshift`, and every image in `image-list.txt` present on disk), push
+  `ghcr.io/<owner>/jetson-orin-bootc:<YYYYMMDD-sha8>` + `latest`. Job `iso`:
   restore entitlement certs from a secret, `sed` the two placeholders, run
   `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso` with
   `/etc/pki/entitlement` and `/etc/rhsm` bind-mounted, upload `*.iso` + `SHA256SUMS`.
 
 Secrets: `RH_REGISTRY_USER`, `RH_REGISTRY_TOKEN` (bib image pull), `RHSM_ENTITLEMENT_TGZ_B64`
-(`tar -C / -czf - etc/pki/entitlement etc/rhsm | base64 -w0` from a subscribed RHEL host — bib
-must depsolve Anaconda RPMs from RHEL repos), `EDGE_SSH_PUBKEY`, `EDGE_PASSWORD_HASH`
-(`openssl passwd -6`). `RHSM_ORG`/`RHSM_ACTIVATION_KEY` are no longer used — the container
-build does no `dnf`. They return when the Kubernetes layer needs RHEL/MicroShift repos.
+(`tar -C / -czf - etc/pki/entitlement etc/rhsm etc/yum.repos.d/redhat.repo | base64 -w0` from a
+subscribed RHEL host — now consumed by **both** jobs: the image build needs the MicroShift RPMs
+and bib must depsolve Anaconda), `OPENSHIFT_PULL_SECRET` (pulls MicroShift's container images at
+build time; never written into the OS image), `EDGE_SSH_PUBKEY`, `EDGE_PASSWORD_HASH`
+(`openssl passwd -6`). `redhat.repo` must be in the entitlement tarball or the rhocp and
+fast-datapath repos are undefined and `--enablerepo` has nothing to enable; the workflow fails
+loudly on that. The subscription must also carry an OpenShift entitlement or those repos never
+appear. `RHSM_ORG`/`RHSM_ACTIVATION_KEY` remain unused — entitlement comes from the tarball.
 A self-hosted registered RHEL 9 aarch64 runner would remove the entitlement secret.
 
 Notes on bib: upstream `bootc-image-builder` was merged into `osbuild/image-builder`, but
@@ -156,24 +176,26 @@ is what the workflow uses. Output lands at `output/bootiso/install.iso`. `anacon
 the stock RHEL kernel (no Tegra modules) for the installer — that is fine, the installer only
 needs NVMe/USB/NIC, and the deployed image brings its own kernel.
 
-## Next step: validate the ISO on hardware, then the Kubernetes layer
+## Next step: validate on hardware, then the NVIDIA device plugin
 
 1. Run `build-bootc.yml`, `dd` the ISO, boot the devkit from USB with QSPI flashed from R36.5.x.
    Confirm `bootc status`, `lsmod | grep nvgpu`, `nvidia-ctk cdi list` → `nvidia.com/gpu=all`,
    and a GPU container (`podman run --device nvidia.com/gpu=all …`).
-2. Add the Kubernetes layer — k3s or MicroShift (open decision; MicroShift is the Red Hat
-   supported path on RHEL for Edge, k3s is lighter and has fewer entitlement dependencies).
-   Whichever is chosen: enable the NVIDIA device plugin via CDI, and use **physically bound
-   images** (`/usr/lib/containers/storage` + `containers-storage` transport) so PostgreSQL,
-   RabbitMQ, KServe and the model server start with no registry reachable.
-3. Re-run the pipeline; the ISO now carries the cluster. Verify a GPU pod schedules and KServe
-   answers an inference request with no network attached.
+2. Same boot, confirm MicroShift: `systemctl status microshift`, `oc get pods -A` all running
+   with no registry reachable (that is what the embedding buys), `vgs` showing free extents in
+   VG `rhel`, and a PVC binding against the topolvm storage class.
+3. Add the NVIDIA device plugin via CDI so pods can request `nvidia.com/gpu`, then the bound app
+   images (PostgreSQL, RabbitMQ, KServe, the model server) by the same embedding mechanism the
+   MicroShift images already use.
+4. Verify a GPU pod schedules and KServe answers an inference request with no network attached.
 4. Later layers (separate Containerfiles `FROM` the k8s image, not this one): `bootc switch`
    unit pointing at the air-gapped registry, greenboot health checks, image signature policy in
    `/etc/containers/policy.json`.
 
-Open decisions to confirm with the maintainer before implementing: k3s vs MicroShift;
-whether to keep the entitlement-secret approach or stand up a self-hosted RHEL runner.
+Open decisions to confirm with the maintainer before implementing: whether to keep the
+entitlement-secret approach or stand up a self-hosted RHEL runner; whether the static
+192.168.1.10 / hostname `Jetson` baked into the ISO becomes per-device before a second node
+joins the air-gapped network.
 
 ## How to work in this repo
 

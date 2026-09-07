@@ -18,8 +18,14 @@ ignoredisk --only-use=nvme0n1
 zerombr
 clearpart --all --initlabel --disklabel=gpt
 reqpart --add-boot
-part / --grow --fstype=xfs
-part swap --recommended
+part pv.01 --grow
+volgroup rhel pv.01
+# 60 GiB root; swap sized by anaconda. Everything left in the VG stays free on
+# purpose — MicroShift's LVMS carves PVCs out of it (PostgreSQL, RabbitMQ, the
+# model store). A full disk means no dynamic provisioner. Needs an NVMe of
+# roughly 80 GiB or more.
+logvol / --vgname=rhel --name=root --size=61440 --fstype=xfs
+logvol swap --vgname=rhel --name=swap --recommended
 
 rootpw --lock
 user --name=edge --groups=wheel --iscrypted --password=@EDGE_PASSWORD_HASH@

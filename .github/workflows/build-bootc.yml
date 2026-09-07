@@ -11,7 +11,10 @@ env:
 
 jobs:
   # 1. Build the derived image natively on arm64 and push it to GHCR.
-  #    The base on quay.io is public; no Red Hat credentials are needed here.
+  #    The base on quay.io is public, but the MicroShift RPMs come from
+  #    entitlement-gated repos and its container images come from
+  #    registry.redhat.io, so this job now needs both the RHSM entitlement and
+  #    an OpenShift pull secret.
   image:
     runs-on: ubuntu-24.04-arm
     permissions: { contents: read, packages: write }
@@ -30,8 +33,35 @@ jobs:
       - name: Login GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
 
+      # Provides /etc/pki/entitlement, /etc/rhsm and /etc/yum.repos.d/redhat.repo.
+      # redhat.repo is what defines the rhocp and fast-datapath repos, so the
+      # secret must be built with it included:
+      #   tar -C / -czf - etc/pki/entitlement etc/rhsm etc/yum.repos.d/redhat.repo | base64 -w0
+      - name: Restore RHSM entitlement
+        run: |
+          echo "${{ secrets.RHSM_ENTITLEMENT_TGZ_B64 }}" | base64 -d | sudo tar -C / -xzf -
+          test -s /etc/yum.repos.d/redhat.repo \
+            || { echo "::error::redhat.repo missing from RHSM_ENTITLEMENT_TGZ_B64 - regenerate the secret including etc/yum.repos.d/redhat.repo"; exit 1; }
+
+      # Used only to pull MicroShift's container images at build time; it is not
+      # baked into the OS image.
+      - name: Write pull secret
+        env:
+          PULL_SECRET: ${{ secrets.OPENSHIFT_PULL_SECRET }}
+        run: |
+          install -m 600 /dev/null /tmp/pull-secret.json
+          printf '%s' "$PULL_SECRET" > /tmp/pull-secret.json
+          jq -e '.auths | length > 0' /tmp/pull-secret.json > /dev/null \
+            || { echo "::error::OPENSHIFT_PULL_SECRET is not a pull secret with an .auths object"; exit 1; }
+
       - name: Build
-        run: sudo podman build -t "$IMAGE:${{ steps.meta.outputs.tag }}" -t "$IMAGE:latest" -f Containerfile .
+        run: |
+          sudo podman build \
+            -v /etc/pki/entitlement:/etc/pki/entitlement:ro \
+            -v /etc/rhsm:/etc/rhsm:ro \
+            -v /etc/yum.repos.d/redhat.repo:/etc/yum.repos.d/redhat.repo:ro \
+            --secret id=pullsecret,src=/tmp/pull-secret.json \
+            -t "$IMAGE:${{ steps.meta.outputs.tag }}" -t "$IMAGE:latest" -f Containerfile .
 
       - name: Smoke test
         run: |
@@ -39,7 +69,16 @@ jobs:
             bootc --version
             cat /etc/nv_tegra_release
             rpm -q nvidia-jetpack-for-rhel-9.8-kmod nvidia-container-toolkit-base
-            ls /usr/lib/modules/*/extra/drivers/gpu/nvgpu/nvgpu.ko'
+            ls /usr/lib/modules/*/extra/drivers/gpu/nvgpu/nvgpu.ko
+            rpm -q microshift microshift-release-info
+            test -L /etc/systemd/system/multi-user.target.wants/microshift.service
+            test -L /etc/systemd/system/multi-user.target.wants/microshift-make-rshared.service
+            test -s /usr/lib/containers/storage/image-list.txt
+            echo "embedded images: $(wc -l < /usr/lib/containers/storage/image-list.txt)"
+            while IFS=, read -r img sha; do
+              test -f "/usr/lib/containers/storage/${sha}/manifest.json" \
+                || { echo "missing embedded image: ${img}"; exit 1; }
+            done < /usr/lib/containers/storage/image-list.txt'
 
       - name: Push
         run: sudo podman push "$IMAGE:${{ steps.meta.outputs.tag }}" && sudo podman push "$IMAGE:latest"
