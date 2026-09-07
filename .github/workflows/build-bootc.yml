@@ -1,0 +1,98 @@
+name: bootc image + installer ISO
+
+on:
+  push:
+    branches: [main]
+    paths: [Containerfile, config.toml, .github/workflows/build-bootc.yml]
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/jetson-orin-bootc
+
+jobs:
+  # 1. Build the derived image natively on arm64 and push it to GHCR.
+  #    The base on quay.io is public; no Red Hat credentials are needed here.
+  image:
+    runs-on: ubuntu-24.04-arm
+    permissions: { contents: read, packages: write }
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install podman
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq podman
+
+      - name: Compute tag
+        id: meta
+        run: echo "tag=$(date -u +%Y%m%d)-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - name: Login GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build
+        run: sudo podman build -t "$IMAGE:${{ steps.meta.outputs.tag }}" -t "$IMAGE:latest" -f Containerfile .
+
+      - name: Smoke test
+        run: |
+          sudo podman run --rm "$IMAGE:${{ steps.meta.outputs.tag }}" bash -c '
+            bootc --version
+            cat /etc/nv_tegra_release
+            rpm -q nvidia-jetpack-for-rhel-9.8-kmod nvidia-container-toolkit-base
+            ls /usr/lib/modules/*/extra/drivers/gpu/nvgpu/nvgpu.ko'
+
+      - name: Push
+        run: sudo podman push "$IMAGE:${{ steps.meta.outputs.tag }}" && sudo podman push "$IMAGE:latest"
+
+  # 2. Turn the pushed image into an unattended Anaconda installer ISO.
+  #    anaconda-iso depsolves Anaconda from RHEL repos, so the Red Hat bib image needs
+  #    entitlement certs from a subscribed RHEL host:
+  #      tar -C / -czf - etc/pki/entitlement etc/rhsm | base64 -w0   -> secret RHSM_ENTITLEMENT_TGZ_B64
+  iso:
+    needs: image
+    runs-on: ubuntu-24.04-arm
+    permissions: { contents: read, packages: read }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install podman
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq podman
+
+      - name: Logins
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}"     | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "${{ secrets.RH_REGISTRY_TOKEN }}" | sudo podman login registry.redhat.io -u "${{ secrets.RH_REGISTRY_USER }}" --password-stdin
+
+      - name: Restore RHSM entitlement
+        run: echo "${{ secrets.RHSM_ENTITLEMENT_TGZ_B64 }}" | base64 -d | sudo tar -C / -xzf -
+
+      - name: Render config.toml
+        run: |
+          sed -e 's|@EDGE_SSH_PUBKEY@|${{ secrets.EDGE_SSH_PUBKEY }}|' \
+              -e 's|@EDGE_PASSWORD_HASH@|${{ secrets.EDGE_PASSWORD_HASH }}|' config.toml > /tmp/config.toml
+          ! grep -q '@EDGE_' /tmp/config.toml
+
+      - name: Build ISO
+        run: |
+          sudo podman pull "$IMAGE:${{ needs.image.outputs.tag }}"
+          mkdir output
+          sudo podman run --rm --privileged --pull=newer \
+            -v /tmp/config.toml:/config.toml:ro \
+            -v ./output:/output \
+            -v /var/lib/containers/storage:/var/lib/containers/storage \
+            -v /etc/pki/entitlement:/etc/pki/entitlement:ro \
+            -v /etc/rhsm:/etc/rhsm:ro \
+            registry.redhat.io/rhel9/bootc-image-builder:latest \
+            --type anaconda-iso --config /config.toml \
+            "$IMAGE:${{ needs.image.outputs.tag }}"
+          sudo mv output/bootiso/install.iso "output/jetson-orin-bootc-${{ needs.image.outputs.tag }}.iso"
+          (cd output && sha256sum *.iso | sudo tee SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jetson-orin-bootc-iso-${{ needs.image.outputs.tag }}
+          path: |
+            output/*.iso
+            output/SHA256SUMS
+          retention-days: 7
+          compression-level: 0

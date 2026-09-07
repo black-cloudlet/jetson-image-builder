@@ -1,0 +1,27 @@
+# bootc-image-builder config for --type anaconda-iso.
+# With a custom kickstart, bib adds only the `ostreecontainer` line; everything else is ours.
+# @EDGE_SSH_PUBKEY@ and @EDGE_PASSWORD_HASH@ are substituted by the workflow (or by hand:
+#   sed -e "s|@EDGE_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" -e "s|@EDGE_PASSWORD_HASH@|$(openssl passwd -6)|" config.toml > /tmp/config.toml).
+[customizations.installer.kickstart]
+contents = """
+text --non-interactive
+lang en_US.UTF-8
+keyboard us
+timezone UTC --utc
+network --bootproto=dhcp --device=link --activate --onboot=on
+
+# Install to the NVMe only; never touch the USB key the installer booted from or the eMMC.
+ignoredisk --only-use=nvme0n1
+zerombr
+clearpart --all --initlabel --disklabel=gpt
+autopart --noswap --type=plain --fstype=xfs
+
+rootpw --lock
+user --name=edge --groups=wheel --iscrypted --password=@EDGE_PASSWORD_HASH@
+sshkey --username=edge "@EDGE_SSH_PUBKEY@"
+
+reboot --eject
+"""
+
+[customizations.iso]
+volume_id = "JETSON_ORIN_BOOTC"
