@@ -1,0 +1,64 @@
+# base -> apps -> microshift -> ISO. Each layer builds on the previous one's
+# digest, so an app-image change does not re-pull MicroShift's control plane and
+# vice versa.
+name: microshift image + installer ISO
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - base/**
+      - apps/**
+      - microshift/**
+      - physically-bound-images/**
+      - .github/workflows/build-microshift.yml
+      - .github/workflows/build-image.yml
+      - .github/workflows/build-iso.yml
+  workflow_dispatch:
+
+jobs:
+  # Republishes the pinned vendor image. No dnf, so no subscription slot.
+  base:
+    uses: ./.github/workflows/build-image.yml
+    with:
+      name: base
+      containerfile: base/Containerfile
+      smoke-test: base/smoke-test.sh
+      needs-entitlement: false
+    secrets: inherit
+    permissions: { contents: read, packages: write }
+
+  # Embedding machinery and app images. Shared by every variant; no dnf either.
+  apps:
+    needs: base
+    uses: ./.github/workflows/build-image.yml
+    with:
+      name: apps
+      containerfile: apps/Containerfile
+      smoke-test: apps/smoke-test.sh
+      build-args: BASE_IMAGE=${{ needs.base.outputs.image-ref }}
+      needs-entitlement: false
+    secrets: inherit
+    permissions: { contents: read, packages: write }
+
+  microshift:
+    needs: apps
+    uses: ./.github/workflows/build-image.yml
+    with:
+      name: microshift
+      containerfile: microshift/Containerfile
+      smoke-test: microshift/smoke-test.sh
+      build-args: BASE_IMAGE=${{ needs.apps.outputs.image-ref }}
+    secrets: inherit
+    permissions: { contents: read, packages: write }
+
+  iso:
+    needs: microshift
+    uses: ./.github/workflows/build-iso.yml
+    with:
+      image-ref: ${{ needs.microshift.outputs.image-ref }}
+      config: microshift/config.toml
+      name: microshift
+      tag: ${{ needs.microshift.outputs.tag }}
+    secrets: inherit
+    permissions: { contents: read, packages: read }

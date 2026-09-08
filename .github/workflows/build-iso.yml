@@ -1,0 +1,113 @@
+# Reusable: pushed image -> unattended Anaconda installer ISO.
+#
+# bib runs nested in the UBI builder, so it needs the SELinux opt-out as well as
+# --privileged. Entitlement is required here too: anaconda-iso depsolves
+# Anaconda from RHEL repos.
+name: build installer ISO
+
+on:
+  workflow_call:
+    inputs:
+      image-ref:
+        description: image to install, pinned by digest
+        type: string
+        required: true
+      config:
+        description: path to the variant's bootc-image-builder config.toml
+        type: string
+        required: true
+      name:
+        description: variant name, used for the ISO and artifact filenames
+        type: string
+        required: true
+      tag:
+        type: string
+        required: true
+      runs-on:
+        type: string
+        default: ubuntu-24.04-arm
+
+jobs:
+  iso:
+    runs-on: ${{ inputs.runs-on }}
+    permissions: { contents: read, packages: read }
+    container:
+      image: registry.access.redhat.com/ubi9/ubi
+      options: --privileged --device /dev/nvme0n1
+    env:
+      ISO_NAME: jetson-orin-bootc-${{ inputs.name }}-${{ inputs.tag }}.iso
+      SMDEV_CONTAINER_OFF: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Container tools
+        run: dnf -y install podman skopeo jq
+
+      # UBI's default policy demands signatures for registry.redhat.io content.
+      - name: Relax image signature policy in the builder
+        run: |
+          jq 'del(.transports)' /etc/containers/policy.json > /tmp/policy.json
+          mv /tmp/policy.json /etc/containers/policy.json
+
+      - name: Register with Red Hat
+        env:
+          RHSM_USERNAME: ${{ secrets.RHSM_USERNAME }}
+          RHSM_PASSWORD: ${{ secrets.RHSM_PASSWORD }}
+        run: subscription-manager register --username="$RHSM_USERNAME" --password="$RHSM_PASSWORD"
+
+      - name: Move container storage and ISO output onto the scratch disk
+        run: |
+          if findmnt -S /dev/nvme0n1 >/dev/null 2>&1; then
+            echo "::warning::/dev/nvme0n1 already mounted; leaving it alone. The build may run out of space."
+            mkdir -p output
+            exit 0
+          fi
+          dnf -y install xfsprogs
+          mkfs.xfs -f /dev/nvme0n1
+          mkdir -p /var/mnt && mount /dev/nvme0n1 /var/mnt
+          mkdir -p /var/mnt/containers /var/mnt/tmp /var/mnt/output /var/lib/containers /var/tmp output
+          mount --bind /var/mnt/containers /var/lib/containers
+          mount --bind /var/mnt/tmp /var/tmp
+          mount --bind /var/mnt/output output
+          df -h /var/lib/containers /var/tmp output
+
+      - name: Logins
+        env:
+          RH_REGISTRY_USER: ${{ secrets.RH_REGISTRY_USER }}
+          RH_REGISTRY_PASSWORD: ${{ secrets.RH_REGISTRY_PASSWORD }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+          printf '%s' "$RH_REGISTRY_PASSWORD" | podman login registry.redhat.io -u "$RH_REGISTRY_USER" --password-stdin
+
+      - name: Render config.toml
+        run: |
+          sed -e 's|@EDGE_SSH_PUBKEY@|${{ secrets.EDGE_SSH_PUBKEY }}|' \
+              -e 's|@EDGE_PASSWORD_HASH@|${{ secrets.EDGE_PASSWORD_HASH }}|' \
+              "${{ inputs.config }}" > /tmp/config.toml
+          ! grep -q '@EDGE_' /tmp/config.toml
+
+      - name: Build ISO
+        run: |
+          podman pull "${{ inputs.image-ref }}"
+          podman run --rm --privileged --pull=newer \
+            --security-opt label=type:unconfined_t \
+            -v /tmp/config.toml:/config.toml:ro \
+            -v ./output:/output \
+            -v /var/lib/containers/storage:/var/lib/containers/storage \
+            registry.redhat.io/rhel9/bootc-image-builder:latest \
+            --type anaconda-iso --config /config.toml "${{ inputs.image-ref }}"
+          mv output/bootiso/install.iso "output/$ISO_NAME"
+          (cd output && sha256sum ./*.iso > SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jetson-orin-bootc-${{ inputs.name }}-iso-${{ inputs.tag }}
+          path: |
+            output/*.iso
+            output/SHA256SUMS
+          retention-days: 7
+          compression-level: 0
+
+      - name: Unregister
+        if: always()
+        run: subscription-manager unregister || true
