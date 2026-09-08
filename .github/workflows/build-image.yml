@@ -24,10 +24,6 @@ on:
         description: newline-separated KEY=VALUE pairs
         type: string
         default: ""
-      needs-entitlement:
-        description: register with subscription-manager; only layers that run dnf against RHEL repos need it
-        type: boolean
-        default: true
       runs-on:
         description: runner label; must be native aarch64
         type: string
@@ -66,8 +62,9 @@ jobs:
           jq 'del(.transports)' /etc/containers/policy.json > /tmp/policy.json
           mv /tmp/policy.json /etc/containers/policy.json
 
+      # Every job registers: xfsprogs for the scratch disk is only in the RHEL
+      # repos this brings in, not in UBI's.
       - name: Register with Red Hat
-        if: inputs.needs-entitlement
         env:
           RHSM_USERNAME: ${{ secrets.RHSM_USERNAME }}
           RHSM_PASSWORD: ${{ secrets.RHSM_PASSWORD }}
@@ -130,5 +127,5 @@ jobs:
           echo "image-ref=${IMAGE}@$(cat /tmp/digest)" >> "$GITHUB_OUTPUT"
 
       - name: Unregister
-        if: always() && inputs.needs-entitlement
+        if: always()
         run: subscription-manager unregister || true

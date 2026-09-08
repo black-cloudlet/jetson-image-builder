@@ -51,8 +51,7 @@ Create `<name>/` with a `Containerfile` (`FROM` the apps layer via an `ARG BASE_
 Nothing in the reusable workflows is MicroShift-specific: layer-shaped checks live in each
 layer's own `smoke-test.sh`, and the kickstart in the variant's own `config.toml` (MicroShift's
 leaves free extents for LVMS; k3s, whose local-path provisioner just uses a directory, would not
-need to). A variant that runs no `dnf` against RHEL repos can pass `needs-entitlement: false` and
-skip the subscription registration entirely, as the base job does.
+need to).
 
 Provisioning the flashing station and flashing the Jetson QSPI are a separate concern and live in
 **[black-cloudlet/jetson-installer-config](https://github.com/black-cloudlet/jetson-installer-config)**
@@ -71,7 +70,9 @@ L4T line as the image built here — before a device can boot this ISO.
 
 Entitlement comes from registering inside the build container, not from a certificate tarball —
 nothing expires in a secret, and `redhat.repo` is generated fresh by the registration. Each run
-consumes a subscription slot and releases it again in an `if: always()` unregister step. The
+job registers and releases the slot again in an `if: always()` unregister step — every job,
+including the two that install no RPMs, because `xfsprogs` for the scratch disk is in the RHEL
+repos rather than UBI's. The
 subscription has to carry an OpenShift entitlement or `rhocp-4.20-for-rhel-9-aarch64-rpms` never
 appears and the build fails at `--enablerepo`.
 
