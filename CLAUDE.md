@@ -157,7 +157,8 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   No `dnf`, so neither this nor the base build needs entitlement.
 - `microshift/Containerfile` — `FROM` the apps layer via `ARG BASE_IMAGE`, then MicroShift 4.20 from
   `rhocp-4.20-for-rhel-9-aarch64-rpms` + `fast-datapath-for-rhel-9-aarch64-rpms`
-  (`firewalld jq microshift microshift-release-info`), the firewall rules (trusted: pod CIDR
+  (`firewalld jq microshift microshift-release-info openshift-clients` — `oc` comes from
+  `openshift-clients`; the `microshift` RPM ships no client), the firewall rules (trusted: pod CIDR
   `10.42.0.0/16`, service CIDR `10.43.0.0/16`, host-endpoint `169.254.169.1`; public: 22, 443,
   6443), the
   `microshift-make-rshared.service` OVN needs, and every MicroShift container image embedded
