@@ -192,8 +192,9 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   the NVMe holding a 60 GiB xfs root and swap, **with the remaining extents left free for
   MicroShift's LVMS provisioner** (fill the VG and the cluster has no dynamic PV source, so
   PostgreSQL/RabbitMQ/the model store have nowhere to go; assumes an NVMe ≳80 GiB), root
-  locked, user `edge` in `wheel` from `@EDGE_SSH_PUBKEY@` /
-  `@EDGE_PASSWORD_HASH@` placeholders, `reboot --eject`. ISO label `JETSON_ORIN_BOOTC`.
+  locked, user `edge` in `wheel` from the `@EDGE_PASSWORD_HASH@` placeholder, `reboot --eject`.
+  ISO label `JETSON_ORIN_BOOTC`. **No SSH key is installed** — by maintainer decision the
+  password is the only credential, which with `rootpw --lock` makes a wrong hash a re-image.
   The static address and hostname are baked into the ISO: two devices imaged from the same ISO
   collide on one segment. `--nameserver` is deliberately absent — the network is air-gapped and
   there is no resolver to point at.
@@ -203,18 +204,18 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   smoke-test inside the result, push `ghcr.io/<owner>/jetson-orin-bootc-<name>:<YYYYMMDD-sha8>`
   + `latest`, and output the ref pinned by digest (`podman push --digestfile`).
   `.github/workflows/build-iso.yml` — **reusable**:
-  register, substitute the two `@EDGE_*@` placeholders into `<variant>/config.toml` (in bash,
-  not `sed`, with the secrets in `env:` — an `&`, a quote or a newline in a value would
-  otherwise mangle the kickstart or break the command) after rejecting an empty or
-  non-crypt `EDGE_PASSWORD_HASH`, run
+  register, substitute `@EDGE_PASSWORD_HASH@` into `<variant>/config.toml` (in bash, not `sed`,
+  with the secret in `env:` — an `&`, a quote or a newline in a value would otherwise mangle the
+  kickstart or break the command) after rejecting an empty, multi-line or non-crypt value, run
   `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso` with
   `/etc/pki/entitlement` and `/etc/rhsm` bind-mounted, upload `*.iso` + `SHA256SUMS`.
 
 Secrets: `RH_REGISTRY_USER`, `RH_REGISTRY_PASSWORD` (bib image pull), `RHSM_USERNAME`/`RHSM_PASSWORD`
 (both jobs `subscription-manager register` inside the UBI builder, and unregister in an
 `if: always()` step), `OPENSHIFT_PULL_SECRET` (pulls MicroShift's and the device plugin's
-container images at build time; never written into the OS image), `EDGE_SSH_PUBKEY`,
-`EDGE_PASSWORD_HASH` (`openssl passwd -6`). The entitlement-certificate tarball
+container images at build time; never written into the OS image),
+`EDGE_PASSWORD_HASH` (`openssl passwd -6`; rejected by the ISO job if empty, multi-line or not
+a `$id$salt$hash` crypt string, since none of those are visible before the device is booted). The entitlement-certificate tarball
 (`RHSM_ENTITLEMENT_TGZ_B64`) was replaced by registration: nothing expires inside a secret and
 `redhat.repo` is generated fresh by the registration. Cost is a register/unregister cycle per
 job — four per run — and the build stops if the credentials are wrong.
@@ -304,8 +305,7 @@ cd /opt/nvidia/Linux_for_Tegra && sudo ./flash.sh p3737-0000-p3701-0000-qspi ext
 
 # Local image + ISO build on a subscribed RHEL 9 aarch64 box (base on quay.io is public)
 sudo podman build -t localhost/jetson-orin-bootc:dev .
-sed -e "s|@EDGE_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
-    -e "s|@EDGE_PASSWORD_HASH@|$(openssl passwd -6)|" config.toml > /tmp/config.toml
+sed -e "s|@EDGE_PASSWORD_HASH@|$(openssl passwd -6)|" config.toml > /tmp/config.toml
 sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfined_t \
   -v /tmp/config.toml:/config.toml:ro -v ./output:/output \
   -v /var/lib/containers/storage:/var/lib/containers/storage \
