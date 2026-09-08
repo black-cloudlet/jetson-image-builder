@@ -63,7 +63,7 @@ L4T line as the image built here — before a device can boot this ISO.
 
 | secret | purpose |
 |---|---|
-| `RH_REGISTRY_USER` / `RH_REGISTRY_TOKEN` | pull `registry.redhat.io/rhel9/bootc-image-builder` (Registry Service Account) |
+| `RH_REGISTRY_USER` / `RH_REGISTRY_PASSWORD` | pull `registry.redhat.io/rhel9/bootc-image-builder` |
 | `RHSM_USERNAME` / `RHSM_PASSWORD` | Red Hat account — both jobs register with subscription-manager for the MicroShift RPMs and bib's Anaconda depsolve |
 | `OPENSHIFT_PULL_SECRET` | pull secret JSON from console.redhat.com/openshift/install/pull-secret — pulls MicroShift's and the device plugin's container images at build time |
 | `EDGE_SSH_PUBKEY` | public key for the `edge` user |

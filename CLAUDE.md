@@ -206,7 +206,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso` with
   `/etc/pki/entitlement` and `/etc/rhsm` bind-mounted, upload `*.iso` + `SHA256SUMS`.
 
-Secrets: `RH_REGISTRY_USER`, `RH_REGISTRY_TOKEN` (bib image pull), `RHSM_USERNAME`/`RHSM_PASSWORD`
+Secrets: `RH_REGISTRY_USER`, `RH_REGISTRY_PASSWORD` (bib image pull), `RHSM_USERNAME`/`RHSM_PASSWORD`
 (both jobs `subscription-manager register` inside the UBI builder, and unregister in an
 `if: always()` step), `OPENSHIFT_PULL_SECRET` (pulls MicroShift's and the device plugin's
 container images at build time; never written into the OS image), `EDGE_SSH_PUBKEY`,
