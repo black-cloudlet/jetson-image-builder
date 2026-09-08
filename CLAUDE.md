@@ -118,8 +118,9 @@ Target stack on the device:
    reusable workflows — `build-image.yml` (one layer) and `build-iso.yml` — plus a caller per
    variant chaining base → variant → ISO. Shared tooling (`physically-bound-images/`) stays at
    the root and the build context is the repository root so any layer can `COPY` it. A layer
-   that runs no `dnf` against RHEL repos passes `needs-entitlement: false` and consumes no
-   subscription slot; the base layer does. Layout and the reusable-workflow split follow
+   layer registers with subscription-manager, including the two that install no RPMs: `xfsprogs`
+   for the runner's scratch disk lives in the RHEL repos, not UBI's. Layout and the
+   reusable-workflow split follow
    `redhat-et/edge-ai-image-pipelines`, whose `Containerfile.podman` is the same idea as our
    `base/`.
 8. **NVIDIA BSP download stays manual** and is documented in `README.md`. Scripting it was tried;
@@ -196,8 +197,8 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   The static address and hostname are baked into the ISO: two devices imaged from the same ISO
   collide on one segment. `--nameserver` is deliberately absent — the network is air-gapped and
   there is no resolver to point at.
-- `.github/workflows/build-image.yml` — **reusable**: register (unless
-  `needs-entitlement: false`), move container storage onto the runner's scratch disk, write the
+- `.github/workflows/build-image.yml` — **reusable**: register, move container storage onto the
+  runner's scratch disk, write the
   pull secret, build the given Containerfile with the repo root as context, run the given
   smoke-test inside the result, push `ghcr.io/<owner>/jetson-orin-bootc-<name>:<YYYYMMDD-sha8>`
   + `latest`, and output the ref pinned by digest (`podman push --digestfile`).
@@ -212,7 +213,8 @@ Secrets: `RH_REGISTRY_USER`, `RH_REGISTRY_PASSWORD` (bib image pull), `RHSM_USER
 container images at build time; never written into the OS image), `EDGE_SSH_PUBKEY`,
 `EDGE_PASSWORD_HASH` (`openssl passwd -6`). The entitlement-certificate tarball
 (`RHSM_ENTITLEMENT_TGZ_B64`) was replaced by registration: nothing expires inside a secret and
-`redhat.repo` is generated fresh by the registration. Cost is a subscription slot per run.
+`redhat.repo` is generated fresh by the registration. Cost is a register/unregister cycle per
+job — four per run — and the build stops if the credentials are wrong.
 Registration uses an account username and password by maintainer preference; an org ID plus
 activation key is the narrower credential and the only option for SSO or 2FA accounts, so revisit
 this if the account gains either. Credentials are passed through `env:` rather than interpolated

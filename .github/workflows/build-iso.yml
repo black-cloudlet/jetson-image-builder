@@ -59,7 +59,6 @@ jobs:
         run: |
           if findmnt -S /dev/nvme0n1 >/dev/null 2>&1; then
             echo "::warning::/dev/nvme0n1 already mounted; leaving it alone. The build may run out of space."
-            mkdir -p output
             exit 0
           fi
           dnf -y install xfsprogs
@@ -88,6 +87,7 @@ jobs:
 
       - name: Build ISO
         run: |
+          mkdir -p output
           podman pull "${{ inputs.image-ref }}"
           podman run --rm --privileged --pull=newer \
             --security-opt label=type:unconfined_t \
