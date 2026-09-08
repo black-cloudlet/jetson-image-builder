@@ -105,15 +105,20 @@ Target stack on the device:
    way. The runner's `/dev/nvme0n1` scratch disk is formatted and `/var/lib/containers`,
    `/var/tmp` and the ISO output are moved onto it — ~10 GB of embedded images plus a
    multi-gigabyte ISO does not fit in the job container's writable layer.
-7. **One directory per Kubernetes variant.** `microshift/` holds a `Containerfile`, a
-   `config.toml` and a `smoke-test.sh`; `k3s/` is expected to sit beside it. CI is a reusable
-   workflow taking a `variant` input plus a thin caller per variant, so a new variant adds a
-   directory and ~12 lines of YAML and touches nothing shared. Shared build/boot tooling
-   (`physically-bound-images/`) stays at the root and the build context is the repository root
-   so any variant can `COPY` it. Images are published per variant as
-   `jetson-orin-bootc-<variant>`, so a fleet's `bootc switch` target names the distribution it
-   is actually running. Layout and the reusable-workflow split follow
-   `redhat-et/edge-ai-image-pipelines`.
+7. **Two layers, one directory per Kubernetes variant.** `base/` carries the
+   physically-bound-images machinery and the application images every variant needs;
+   `microshift/` builds `FROM` it and adds MicroShift, the device plugin and their images.
+   `k3s/` is expected beside `microshift/`. The split is about rebuild cost: a variant layer
+   pulls a whole control plane (MicroShift's is nine images) and that should not be redone
+   whenever an application image or a model changes. Each layer is pushed separately as
+   `jetson-orin-bootc-<name>` and the next builds on its **digest**, not its tag. CI is two
+   reusable workflows — `build-image.yml` (one layer) and `build-iso.yml` — plus a caller per
+   variant chaining base → variant → ISO. Shared tooling (`physically-bound-images/`) stays at
+   the root and the build context is the repository root so any layer can `COPY` it. A layer
+   that runs no `dnf` against RHEL repos passes `needs-entitlement: false` and consumes no
+   subscription slot; the base layer does. Layout and the reusable-workflow split follow
+   `redhat-et/edge-ai-image-pipelines`, whose `Containerfile.podman` is the same idea as our
+   `base/`.
 8. **NVIDIA BSP download stays manual** and is documented in `README.md`. Scripting it was tried;
    NVIDIA's version-string and URL-path (`release/` vs `releases/`) inconsistencies made it fragile.
 
@@ -141,12 +146,17 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
 
 ### bootc image + installer ISO pipeline (`microshift/`, `physically-bound-images/`, `.github/workflows/`)
 
-- `microshift/Containerfile` — `FROM` the pinned JetPack-for-RHEL image, then MicroShift 4.20 from
+- `base/Containerfile` — `FROM` the pinned JetPack-for-RHEL image; installs the
+  physically-bound-images scripts and `copy-embedded-images.service`, and embeds whatever
+  `APP_IMAGES` names (empty today; PostgreSQL, RabbitMQ, KServe and the model server go here).
+  No `dnf`, so its build needs no entitlement.
+- `microshift/Containerfile` — `FROM` the base layer via `ARG BASE_IMAGE`, then MicroShift 4.20 from
   `rhocp-4.20-for-rhel-9-aarch64-rpms` + `fast-datapath-for-rhel-9-aarch64-rpms`
   (`firewalld jq microshift microshift-release-info`), the mandatory firewall rules, the
   `microshift-make-rshared.service` OVN needs, and every MicroShift container image embedded
   into `/usr/lib/containers/storage` with a `microshift.service.d` drop-in that copies them
-  into containers-storage before the service starts, plus the NVIDIA device plugin
+  into containers-storage before the service starts (the unit itself lives in the base layer;
+  this one only orders against it), plus the NVIDIA device plugin
   (`nvidia-ctk runtime configure --runtime=crio`, the plugin manifest and a kustomization in
   `/etc/microshift/manifests`, and the plugin image embedded alongside MicroShift's).
   Images are copied into the main store rather than referenced as an additional store, because
@@ -179,11 +189,12 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   The static address and hostname are baked into the ISO: two devices imaged from the same ISO
   collide on one segment. `--nameserver` is deliberately absent — the network is air-gapped and
   there is no resolver to point at.
-- `.github/workflows/build-bootc-image.yml` — **reusable** (`workflow_call`, input `variant`).
-  Job `image`: register, move container storage onto the runner's scratch disk, write the pull
-  secret, build `<variant>/Containerfile` with the repo root as context, run
-  `<variant>/smoke-test.sh` inside the result, push
-  `ghcr.io/<owner>/jetson-orin-bootc-<variant>:<YYYYMMDD-sha8>` + `latest`. Job `iso`:
+- `.github/workflows/build-image.yml` — **reusable**: register (unless
+  `needs-entitlement: false`), move container storage onto the runner's scratch disk, write the
+  pull secret, build the given Containerfile with the repo root as context, run the given
+  smoke-test inside the result, push `ghcr.io/<owner>/jetson-orin-bootc-<name>:<YYYYMMDD-sha8>`
+  + `latest`, and output the ref pinned by digest (`podman push --digestfile`).
+  `.github/workflows/build-iso.yml` — **reusable**:
   register, `sed` the two placeholders into `<variant>/config.toml`, run
   `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso` with
   `/etc/pki/entitlement` and `/etc/rhsm` bind-mounted, upload `*.iso` + `SHA256SUMS`.

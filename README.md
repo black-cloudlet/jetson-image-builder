@@ -11,24 +11,34 @@ registry reachable. Today there is one variant, `microshift/`; `k3s/` is expecte
 Building a variant pushes `ghcr.io/black-cloudlet/jetson-orin-bootc-<variant>:<YYYYMMDD-sha8>`
 and uploads an installer ISO as a workflow artifact.
 
+Each variant is built as **two layers**: a shared `base/` carrying the embedding machinery and
+the application images, and a variant layer adding the Kubernetes distribution on top. They are
+pushed as separate images and the variant builds on the base's digest, so changing an application
+image or a model does not re-pull MicroShift's nine control-plane images.
+
 | Path | Does |
 | ---- | ---- |
-| `microshift/Containerfile` | pinned JetPack-for-RHEL base + MicroShift 4.20 + NVIDIA device plugin + embedded images |
+| `base/Containerfile` | pinned JetPack-for-RHEL base + physically-bound-images machinery + `APP_IMAGES` |
+| `base/smoke-test.sh` | checks run inside the base image before it is pushed |
+| `microshift/Containerfile` | `FROM` the base + MicroShift 4.20 + NVIDIA device plugin + their images |
 | `microshift/config.toml` | bootc-image-builder config — the unattended kickstart and the ISO label |
-| `microshift/smoke-test.sh` | checks run inside the built image before it is pushed |
-| `physically-bound-images/` | shared: embed images at build time, replay them into containers-storage at boot |
-| `.github/workflows/build-bootc-image.yml` | reusable — builds any variant and its ISO |
-| `.github/workflows/build-microshift.yml` | thin caller for the `microshift` variant |
+| `microshift/smoke-test.sh` | checks run inside the finished image before it is pushed |
+| `physically-bound-images/` | shared scripts: embed at build time, replay into containers-storage at boot |
+| `.github/workflows/build-image.yml` | reusable — builds and pushes one layer |
+| `.github/workflows/build-iso.yml` | reusable — turns a pushed image into an installer ISO |
+| `.github/workflows/build-microshift.yml` | caller — chains base → microshift → ISO |
 
 ### Adding a variant
 
-Create `<name>/` with a `Containerfile`, a `config.toml` and a `smoke-test.sh`, then add a caller
-workflow mirroring `build-microshift.yml` with `variant: <name>`. The build context is the
-repository root, so a variant's Containerfile can `COPY physically-bound-images/...` the way the
-MicroShift one does. Nothing in the reusable workflow is MicroShift-specific: variant-shaped
-checks live in the variant's own `smoke-test.sh`, and the kickstart in its own `config.toml`
-(MicroShift's leaves free extents for LVMS; k3s, whose local-path provisioner just uses a
-directory, would not need to).
+Create `<name>/` with a `Containerfile` (`FROM` the base via an `ARG BASE_IMAGE`), a
+`config.toml` and a `smoke-test.sh`, then copy `build-microshift.yml` and point its `microshift`
+and `iso` jobs at the new directory. The `base` job is reused unchanged.
+
+Nothing in the reusable workflows is MicroShift-specific: layer-shaped checks live in each
+layer's own `smoke-test.sh`, and the kickstart in the variant's own `config.toml` (MicroShift's
+leaves free extents for LVMS; k3s, whose local-path provisioner just uses a directory, would not
+need to). A variant that runs no `dnf` against RHEL repos can pass `needs-entitlement: false` and
+skip the subscription registration entirely, as the base job does.
 
 Provisioning the flashing station and flashing the Jetson QSPI are a separate concern and live in
 **[black-cloudlet/jetson-installer-config](https://github.com/black-cloudlet/jetson-installer-config)**
@@ -91,8 +101,9 @@ after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UT
 
 ## Where the build runs
 
-`build-bootc-image.yml` is reusable (`workflow_call`) and takes a `variant` input; each variant
-gets a thin caller. `runs-on: ubuntu-24.04-arm` for a native arm64 machine, but every step
+`build-image.yml` builds one layer and `build-iso.yml` turns the final image into an ISO; both
+are reusable (`workflow_call`), and `build-microshift.yml` chains them. Each layer is pushed and
+handed to the next **by digest**, not by tag, so a layer builds on exactly what was pushed. `runs-on: ubuntu-24.04-arm` for a native arm64 machine, but every step
 executes inside `registry.access.redhat.com/ubi9/ubi`: podman, buildah and skopeo come from RHEL
 rather than Ubuntu's archive, and `subscription-manager register` inside that container supplies
 entitlement. GitHub offers no RHEL-hosted runner, so this is the closest thing to building on RHEL
@@ -122,6 +133,10 @@ secret has to be passed:
 ```
 sudo podman build \
   --secret id=pullsecret,src=$HOME/pull-secret.json \
+  -t localhost/jetson-orin-bootc-base:dev -f base/Containerfile .
+sudo podman build \
+  --secret id=pullsecret,src=$HOME/pull-secret.json \
+  --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-base:dev \
   -t localhost/jetson-orin-bootc-microshift:dev -f microshift/Containerfile .
 sed -e "s|@EDGE_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
     -e "s|@EDGE_PASSWORD_HASH@|$(openssl passwd -6)|" microshift/config.toml > /tmp/config.toml

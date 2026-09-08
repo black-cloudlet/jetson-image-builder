@@ -1,9 +1,11 @@
-# Derived bootc image for the Jetson AGX Orin (P3737 + P3701).
-# The base is Red Hat's JetPack-for-RHEL image: RHEL 9.8, kernel 5.14.0-687.42.1.el9_8,
-# JetPack 6.2.2 / L4T r36.5.0, Tegra kmods, CUDA/JetPack userspace, nvidia-ctk CDI unit.
-# Nothing NVIDIA-related needs to be added here.
-ARG BASE=quay.io/redhat-user-workloads/jetpack-for-rhel-tenant/rhel-98-bootc:6.2.2_5.14.0-687.42.1_090326003719
-FROM ${BASE}
+# MicroShift 4.20 on top of the shared base layer (base/Containerfile), which
+# supplies the physically-bound-images scripts, copy-embedded-images.service
+# and any application images.
+#
+# BASE_IMAGE is the reference the base build pushed. The workflow passes it by
+# digest; the default is for local builds.
+ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-base:latest
+FROM ${BASE_IMAGE}
 
 # ---------------------------------------------------------------------------
 # MicroShift
@@ -52,6 +54,14 @@ ExecStart=/usr/bin/mount --make-rshared /\n\
 WantedBy=multi-user.target\n' > /usr/lib/systemd/system/microshift-make-rshared.service && \
     systemctl enable microshift-make-rshared.service
 
+# MicroShift must not start before the base layer's service has replayed the
+# embedded images into containers-storage.
+RUN mkdir -p /usr/lib/systemd/system/microshift.service.d && \
+    printf '[Unit]\n\
+Requires=copy-embedded-images.service\n\
+After=copy-embedded-images.service\n' \
+      > /usr/lib/systemd/system/microshift.service.d/microshift-copy-images.conf
+
 # ---------------------------------------------------------------------------
 # NVIDIA device plugin
 #
@@ -74,46 +84,10 @@ resources:\n\
   - nvidia-device-plugin.yml\n' > /etc/microshift/manifests/kustomization.yaml
 
 # ---------------------------------------------------------------------------
-# Physically bound images
-#
-# The nodes have no network at first boot, so every image the cluster needs has
-# to already be on disk: MicroShift's own control plane (etcd, kube-apiserver,
-# OVN, CoreDNS, service-ca, CSI) plus the device plugin referenced by the
-# manifest above.
-#
-# The cache lives in /usr/lib/containers-image-cache and is replayed into
-# containers-storage once per boot by copy-embedded-images.service. Red Hat's
-# own image-mode recipe instead uses ExecStartPre= on microshift.service; a
-# standalone oneshot is used here so the copy happens once per boot rather than
-# on every MicroShift restart, and so later app images share one mechanism.
-# Approach and scripts from redhat-et/edge-ai-image-pipelines (Apache-2.0).
+# Embed this layer's images: MicroShift's control plane (etcd, kube-apiserver,
+# OVN, CoreDNS, service-ca, CSI) and the device plugin referenced by the
+# manifest above. Uses the base layer's embed_image.sh and cache.
 # ---------------------------------------------------------------------------
-COPY --chmod=0555 physically-bound-images/embed_image.sh \
-      /opt/physically-bound-images/embed_image.sh
-COPY --chmod=0555 physically-bound-images/copy_embedded_images.sh \
-      /opt/physically-bound-images/copy_embedded_images.sh
-
-# No network-online dependency: the copy reads local disk only, and waiting for
-# a carrier that is never coming would add NetworkManager-wait-online's timeout
-# to every boot of a disconnected node.
-RUN printf '[Unit]\n\
-Description=Copy embedded container images into containers-storage\n\
-Wants=basic.target\n\
-After=basic.target local-fs.target\n\
-[Service]\n\
-Type=oneshot\n\
-ExecStart=/opt/physically-bound-images/copy_embedded_images.sh\n\
-RemainAfterExit=yes\n\
-[Install]\n\
-WantedBy=multi-user.target\n' > /usr/lib/systemd/system/copy-embedded-images.service && \
-    systemctl enable copy-embedded-images.service
-
-RUN mkdir -p /usr/lib/systemd/system/microshift.service.d && \
-    printf '[Unit]\n\
-Requires=copy-embedded-images.service\n\
-After=copy-embedded-images.service\n' \
-      > /usr/lib/systemd/system/microshift.service.d/microshift-copy-images.conf
-
 RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
     images="$(jq -r '.images[]' /usr/share/microshift/release/release-"$(uname -m)".json)" ; \
     images="${images} $(awk '{for(i=1;i<NF;i++) if($i=="image:"){gsub(/"/,"",$(i+1)); print $(i+1)}}' \
@@ -122,8 +96,5 @@ RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
         /opt/physically-bound-images/embed_image.sh "${img}" \
             --authfile /run/secrets/pull-secret.json ; \
     done
-
-# Next layers (bound app images: PostgreSQL, RabbitMQ, KServe, the model
-# server) go here — same embed_image.sh, same cache, same boot-time replay.
 
 RUN bootc container lint

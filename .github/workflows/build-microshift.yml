@@ -1,20 +1,50 @@
-# MicroShift variant. Thin caller; everything lives in build-bootc-image.yml.
+# MicroShift variant: base layer -> MicroShift layer -> installer ISO.
+# Each layer is pushed separately and the next builds on its digest, so a
+# change to an application image does not re-pull MicroShift's control plane.
 name: microshift image + installer ISO
 
 on:
   push:
     branches: [main]
     paths:
+      - base/**
       - microshift/**
       - physically-bound-images/**
       - .github/workflows/build-microshift.yml
-      - .github/workflows/build-bootc-image.yml
+      - .github/workflows/build-image.yml
+      - .github/workflows/build-iso.yml
   workflow_dispatch:
 
 jobs:
-  microshift:
-    uses: ./.github/workflows/build-bootc-image.yml
+  # No dnf against RHEL repos here, so no subscription slot is consumed.
+  base:
+    uses: ./.github/workflows/build-image.yml
     with:
-      variant: microshift
+      name: base
+      containerfile: base/Containerfile
+      smoke-test: base/smoke-test.sh
+      needs-entitlement: false
     secrets: inherit
     permissions: { contents: read, packages: write }
+
+  microshift:
+    needs: base
+    uses: ./.github/workflows/build-image.yml
+    with:
+      name: microshift
+      containerfile: microshift/Containerfile
+      smoke-test: microshift/smoke-test.sh
+      build-args: BASE_IMAGE=${{ needs.base.outputs.image-ref }}
+    secrets: inherit
+    permissions: { contents: read, packages: write }
+
+  iso:
+    needs: microshift
+    uses: ./.github/workflows/build-iso.yml
+    with:
+      image-ref: ${{ needs.microshift.outputs.image-ref }}
+      config: microshift/config.toml
+      name: microshift
+      tag: ${{ needs.microshift.outputs.tag }}
+    secrets: inherit
+    permissions: { contents: read, packages: read }
