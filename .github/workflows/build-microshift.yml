@@ -1,7 +1,6 @@
-# MicroShift variant: base -> apps -> microshift -> installer ISO.
-# Each layer is pushed separately and the next builds on its digest, so a change
-# to an application image does not re-pull MicroShift's control plane, and a
-# MicroShift change does not re-pull the application images.
+# base -> apps -> microshift -> ISO. Each layer builds on the previous one's
+# digest, so an app-image change does not re-pull MicroShift's control plane and
+# vice versa.
 name: microshift image + installer ISO
 
 on:
@@ -18,8 +17,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Republishes the pinned vendor image under our own name. Adds nothing, runs
-  # no dnf, so no subscription slot is consumed.
+  # Republishes the pinned vendor image. No dnf, so no subscription slot.
   base:
     uses: ./.github/workflows/build-image.yml
     with:
@@ -30,8 +28,7 @@ jobs:
     secrets: inherit
     permissions: { contents: read, packages: write }
 
-  # Embedding machinery and application images. Shared by every variant, and
-  # likewise no dnf.
+  # Embedding machinery and app images. Shared by every variant; no dnf either.
   apps:
     needs: base
     uses: ./.github/workflows/build-image.yml

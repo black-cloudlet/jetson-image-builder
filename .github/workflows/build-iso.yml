@@ -1,8 +1,8 @@
-# Reusable: turn a pushed bootc image into an unattended Anaconda installer ISO.
+# Reusable: pushed image -> unattended Anaconda installer ISO.
 #
-# bib runs nested inside the UBI builder, so unlike on an Ubuntu host it needs
-# the SELinux opt-out as well as --privileged. Entitlement is required here too:
-# anaconda-iso depsolves Anaconda from RHEL repos.
+# bib runs nested in the UBI builder, so it needs the SELinux opt-out as well as
+# --privileged. Entitlement is required here too: anaconda-iso depsolves
+# Anaconda from RHEL repos.
 name: build installer ISO
 
 on:
@@ -43,6 +43,7 @@ jobs:
       - name: Container tools
         run: dnf -y install podman skopeo jq
 
+      # UBI's default policy demands signatures for registry.redhat.io content.
       - name: Relax image signature policy in the builder
         run: |
           jq 'del(.transports)' /etc/containers/policy.json > /tmp/policy.json

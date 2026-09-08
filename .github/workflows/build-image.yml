@@ -1,12 +1,9 @@
-# Reusable: build one bootc image and push it to GHCR.
+# Reusable: build one layer and push it to GHCR. Context is the repository root
+# so any layer can COPY shared tooling.
 #
-# Called once per layer. The build context is the repository root, so any
-# layer's Containerfile can COPY shared tooling such as physically-bound-images/.
-#
-# Runs on an Ubuntu runner for native aarch64 but does all its work inside a UBI
-# container, so podman/buildah/skopeo come from RHEL and subscription-manager
-# can supply entitlement. GitHub offers no RHEL-hosted runner. Pattern from
-# redhat-et/edge-ai-image-pipelines (Apache-2.0).
+# Ubuntu runner for native aarch64, all work inside a UBI container so
+# podman/skopeo come from RHEL and subscription-manager can supply entitlement.
+# GitHub offers no RHEL-hosted runner.
 name: build bootc image
 
 on:
@@ -47,13 +44,12 @@ jobs:
     runs-on: ${{ inputs.runs-on }}
     permissions: { contents: read, packages: write }
     container:
-      # --device is the runner's scratch disk: embedded container images do not
-      # fit in the job container's writable layer.
+      # --device: embedded images do not fit in the job container's writable layer.
       image: registry.access.redhat.com/ubi9/ubi
       options: --privileged --device /dev/nvme0n1
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/jetson-orin-bootc-${{ inputs.name }}
-      # Use this container's own registration, not the (unsubscribed) host's.
+      # Use this container's registration, not the (unsubscribed) host's.
       SMDEV_CONTAINER_OFF: 1
     outputs:
       image-ref: ${{ steps.push.outputs.image-ref }}
@@ -95,7 +91,7 @@ jobs:
       - name: Login GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      # Pulls images embedded by this layer; never written into the OS image.
+      # Build-time only; never written into the OS image.
       - name: Write pull secret
         env:
           PULL_SECRET: ${{ secrets.OPENSHIFT_PULL_SECRET }}
@@ -122,8 +118,7 @@ jobs:
       - name: Smoke test
         run: podman run --rm -i "$IMAGE:${{ steps.meta.outputs.tag }}" bash -s < "${{ inputs.smoke-test }}"
 
-      # Layers downstream consume the digest, not the tag, so they build on
-      # exactly what was pushed here.
+      # Downstream layers consume the digest, not the tag.
       - name: Push
         id: push
         run: |
