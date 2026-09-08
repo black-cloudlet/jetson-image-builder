@@ -78,7 +78,7 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
           printf '%s' "$RH_REGISTRY_PASSWORD" | podman login registry.redhat.io -u "$RH_REGISTRY_USER" --password-stdin
 
-      # Validate before bib runs. An empty or plaintext EDGE_PASSWORD_HASH still
+      # Validate before bib runs. An empty or plaintext JETSON_PASSWORD_HASH still
       # renders a complete kickstart, so the only symptom is a finished ISO whose
       # `jetson` account cannot be logged into -- an hour of build for nothing, and
       # `--password=` with `--iscrypted` leaves the account with no password at all.
@@ -89,35 +89,35 @@ jobs:
       # sed's and (bash >= 5.2) bash's replacement text -- silently mangling a key.
       - name: Render config.toml
         env:
-          EDGE_SSH_PUBKEY: ${{ secrets.EDGE_SSH_PUBKEY }}
-          EDGE_PASSWORD_HASH: ${{ secrets.EDGE_PASSWORD_HASH }}
+          JETSON_SSH_PUBKEY: ${{ secrets.JETSON_SSH_PUBKEY }}
+          JETSON_PASSWORD_HASH: ${{ secrets.JETSON_PASSWORD_HASH }}
           CONFIG: ${{ inputs.config }}
         run: |
           check() {
             [ -n "$2" ] || { echo "::error::$1 is empty or unset; add it to the repository secrets"; exit 1; }
             case $2 in *[$'\n\r']*) echo "::error::$1 contains a line break; store it as a single line"; exit 1;; esac
           }
-          check EDGE_SSH_PUBKEY "$EDGE_SSH_PUBKEY"
-          check EDGE_PASSWORD_HASH "$EDGE_PASSWORD_HASH"
-          case $EDGE_PASSWORD_HASH in
+          check JETSON_SSH_PUBKEY "$JETSON_SSH_PUBKEY"
+          check JETSON_PASSWORD_HASH "$JETSON_PASSWORD_HASH"
+          case $JETSON_PASSWORD_HASH in
             \$?*\$?*\$?*) ;;
-            *) echo "::error::EDGE_PASSWORD_HASH is not a crypt hash (expected \$6\$salt\$hash from 'openssl passwd -6'); the kickstart says --iscrypted, so a plaintext value can never be logged in with"; exit 1;;
+            *) echo "::error::JETSON_PASSWORD_HASH is not a crypt hash (expected \$6\$salt\$hash from 'openssl passwd -6'); the kickstart says --iscrypted, so a plaintext value can never be logged in with"; exit 1;;
           esac
-          case $EDGE_SSH_PUBKEY in
+          case $JETSON_SSH_PUBKEY in
             ssh-*|ecdsa-*|sk-*) ;;
-            *) echo "::error::EDGE_SSH_PUBKEY is not an OpenSSH public key; it must be the contents of the .pub file, not a path to it"; exit 1;;
+            *) echo "::error::JETSON_SSH_PUBKEY is not an OpenSSH public key; it must be the contents of the .pub file, not a path to it"; exit 1;;
           esac
 
           # bash 5.2 expands & in the replacement to the matched text; 5.1 has no
           # such shopt to unset, which is the same thing as it being off.
           shopt -u patsub_replacement 2>/dev/null || true
           config=$(cat "$CONFIG")
-          config=${config//@EDGE_SSH_PUBKEY@/$EDGE_SSH_PUBKEY}
-          config=${config//@EDGE_PASSWORD_HASH@/$EDGE_PASSWORD_HASH}
+          config=${config//@JETSON_SSH_PUBKEY@/$JETSON_SSH_PUBKEY}
+          config=${config//@JETSON_PASSWORD_HASH@/$JETSON_PASSWORD_HASH}
           install -m 600 /dev/null /tmp/config.toml
           printf '%s\n' "$config" > /tmp/config.toml
-          if grep -q '@EDGE_' /tmp/config.toml; then
-            echo "::error::unsubstituted @EDGE_ placeholder left in $CONFIG"
+          if grep -q '@JETSON_' /tmp/config.toml; then
+            echo "::error::unsubstituted @JETSON_ placeholder left in $CONFIG"
             exit 1
           fi
 

@@ -65,10 +65,10 @@ L4T line as the image built here — before a device can boot this ISO.
 | `RH_REGISTRY_USER` / `RH_REGISTRY_PASSWORD` | pull `registry.redhat.io/rhel9/bootc-image-builder` |
 | `RHSM_USERNAME` / `RHSM_PASSWORD` | Red Hat account — both jobs register with subscription-manager for the MicroShift RPMs and bib's Anaconda depsolve |
 | `OPENSHIFT_PULL_SECRET` | pull secret JSON from console.redhat.com/openshift/install/pull-secret — pulls MicroShift's and the device plugin's container images at build time |
-| `EDGE_SSH_PUBKEY` | public key for the `jetson` user |
-| `EDGE_PASSWORD_HASH` | `openssl passwd -6` output for the `jetson` user — the hash, not the password |
+| `JETSON_SSH_PUBKEY` | public key for the `jetson` user |
+| `JETSON_PASSWORD_HASH` | `openssl passwd -6` output for the `jetson` user — the hash, not the password |
 
-Both `EDGE_*` secrets are validated before bib runs: unset, empty, multi-line, or a plaintext
+Both `JETSON_*` secrets are validated before bib runs: unset, empty, multi-line, or a plaintext
 password where a `$6$salt$hash` is expected fails the ISO job at the render step. The kickstart
 uses `--iscrypted`, so a plaintext value would install an account nobody can log into, and an
 empty one an account with no password at all — neither is visible until the ISO is booted.
@@ -175,8 +175,8 @@ sudo podman build \
   --secret id=pullsecret,src=$HOME/pull-secret.json \
   --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-apps:dev \
   -t localhost/jetson-orin-bootc-microshift:dev -f microshift/Containerfile .
-sed -e "s|@EDGE_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
-    -e "s|@EDGE_PASSWORD_HASH@|$(openssl passwd -6)|" microshift/config.toml > /tmp/config.toml
+sed -e "s|@JETSON_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
+    -e "s|@JETSON_PASSWORD_HASH@|$(openssl passwd -6)|" microshift/config.toml > /tmp/config.toml
 mkdir output
 sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfined_t \
   -v /tmp/config.toml:/config.toml:ro -v ./output:/output \

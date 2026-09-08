@@ -1,7 +1,7 @@
 # bootc-image-builder config for --type anaconda-iso.
 # With a custom kickstart, bib adds only the `ostreecontainer` line; everything else is ours.
-# @EDGE_SSH_PUBKEY@ and @EDGE_PASSWORD_HASH@ are substituted by the workflow (or by hand:
-#   sed -e "s|@EDGE_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" -e "s|@EDGE_PASSWORD_HASH@|$(openssl passwd -6)|" config.toml > /tmp/config.toml).
+# @JETSON_SSH_PUBKEY@ and @JETSON_PASSWORD_HASH@ are substituted by the workflow (or by hand:
+#   sed -e "s|@JETSON_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" -e "s|@JETSON_PASSWORD_HASH@|$(openssl passwd -6)|" config.toml > /tmp/config.toml).
 [customizations.installer.kickstart]
 contents = """
 text --non-interactive
@@ -28,8 +28,8 @@ logvol / --vgname=rhel --name=root --size=61440 --fstype=xfs
 logvol swap --vgname=rhel --name=swap --recommended
 
 rootpw --lock
-user --name=jetson --groups=wheel --iscrypted --password=@EDGE_PASSWORD_HASH@
-sshkey --username=jetson "@EDGE_SSH_PUBKEY@"
+user --name=jetson --groups=wheel --iscrypted --password=@JETSON_PASSWORD_HASH@
+sshkey --username=jetson "@JETSON_SSH_PUBKEY@"
 
 reboot --eject
 """
