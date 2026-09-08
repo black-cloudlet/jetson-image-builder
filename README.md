@@ -8,8 +8,8 @@ kernel 5.14.0-687.42.1). Each **variant** is a directory deriving from it and la
 Kubernetes distribution, with every container image embedded so the cluster starts with no
 registry reachable. Today there is one variant, `microshift/`; `k3s/` is expected beside it.
 
-Building a variant pushes `ghcr.io/black-cloudlet/jetson-orin-bootc-<variant>:<YYYYMMDD-sha8>`
-and uploads an installer ISO as a workflow artifact.
+Every layer is published as `ghcr.io/black-cloudlet/jetson-orin-bootc-<layer>:<YYYYMMDD-sha8>`,
+and the finished variant also uploads an installer ISO as a workflow artifact.
 
 Each variant is built as **three layers**, each pushed separately and each building on the
 previous one's digest:
@@ -42,7 +42,7 @@ reuses `base` and `apps` untouched.
 | `.github/workflows/build-iso.yml` | reusable — turns a pushed image into an installer ISO |
 | `.github/workflows/build-microshift.yml` | caller — chains base → apps → microshift → ISO |
 
-### Adding a variant
+## Adding a variant
 
 Create `<name>/` with a `Containerfile` (`FROM` the apps layer via an `ARG BASE_IMAGE`), a
 `config.toml` and a `smoke-test.sh`, then copy `build-microshift.yml` and point its top job and
@@ -75,18 +75,23 @@ consumes a subscription slot and releases it again in an `if: always()` unregist
 subscription has to carry an OpenShift entitlement or `rhocp-4.20-for-rhel-9-aarch64-rpms` never
 appears and the build fails at `--enablerepo`.
 
-Two things to know about using an account password here. It is a broader credential than an
-organisation ID plus activation key, which can only attach subscriptions — if it leaks, so does
-portal access. And an account with SSO or two-factor cannot register this way at all; that is the
-case where activation keys are the only option. If your organisation has Simple Content Access
-turned off, add `--auto-attach` to the register command or no repositories will be entitled.
+Three things to know about registering with an account password. It is a broader credential than
+an organisation ID plus activation key, which can only attach subscriptions — if it leaks, so
+does portal access. An account with SSO or two-factor cannot register this way at all; that is
+the case where activation keys are the only option. And if the organisation has Simple Content
+Access turned off, the register command needs `--auto-attach` or nothing will be entitled.
 
-The pull secret is used only during the build; it is not written into the OS image.
+The pull secret is used only during the build; it is not written into the OS image. It covers
+`quay.io/openshift-release-dev`, where MicroShift's control-plane images live; the separate
+`RH_REGISTRY_*` pair covers `registry.redhat.io`, where bootc-image-builder lives. A pull secret
+downloaded from console.redhat.com normally carries a `registry.redhat.io` entry too
+(`jq -r '.auths | keys[]' pull-secret.json` to check), so the two can be collapsed into one
+secret — kept separate so `RH_REGISTRY_*` can hold a narrow Registry Service Account instead.
 
 ## Install
 
-The kickstart in `microshift/config.toml` is fully unattended: it wipes `nvme0n1` only (the USB key and
-eMMC are ignored), creates `edge` in `wheel`, locks root, and reboots ejecting the media.
+The kickstart in `microshift/config.toml` is fully unattended: it wipes `nvme0n1` only (the USB
+key and eMMC are ignored), creates `edge` in `wheel`, locks root, and reboots ejecting the media.
 Booting it on a device with data on the NVMe is destructive.
 
 The network is **static**: the device comes up as `Jetson` on `192.168.1.10/24` via
@@ -97,8 +102,6 @@ after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UT
 1. Flash QSPI on the station from a **R36.5.x** BSP (same L4T line as the image):
    `sudo ./flash.sh p3737-0000-p3701-0000-qspi external`
 2. `dd` the ISO to a USB key, plug it in with the NVMe fitted, ESC at the NVIDIA logo, pick USB.
-   The firewall opens 22, 443 and 6443 on the public zone, so the API server and the router are
-   reachable from the air-gapped LAN, not just from the node.
 3. Wait for the reboot, then over serial (`ttyTCU0`) or `ssh edge@192.168.1.10`:
    ```
    bootc status
@@ -107,7 +110,9 @@ after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UT
    systemctl status nvidia-ctk && nvidia-ctk cdi list     # nvidia.com/gpu=all
    ```
 4. Then MicroShift. First boot is slow — `copy-embedded-images.service` replays every embedded
-   image into containers-storage before MicroShift starts, and the cluster settles after that:
+   image into containers-storage before MicroShift starts, and the cluster settles after that.
+   The firewall opens 22, 443 and 6443 on the public zone, so the API server and the router are
+   reachable from the air-gapped LAN rather than only from the node:
    ```
    systemctl status microshift
    export KUBECONFIG=/var/lib/microshift/resources/kubeadmin/kubeconfig
@@ -125,9 +130,11 @@ after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UT
 
 `build-image.yml` builds one layer and `build-iso.yml` turns the final image into an ISO; both
 are reusable (`workflow_call`), and `build-microshift.yml` chains them. Each layer is pushed and
-handed to the next **by digest**, not by tag, so a layer builds on exactly what was pushed. `runs-on: ubuntu-24.04-arm` for a native arm64 machine, but every step
-executes inside `registry.access.redhat.com/ubi9/ubi`: podman, buildah and skopeo come from RHEL
-rather than Ubuntu's archive, and `subscription-manager register` inside that container supplies
+handed to the next **by digest**, not by tag, so a layer builds on exactly what was pushed.
+
+`runs-on: ubuntu-24.04-arm` for a native arm64 machine, but every step executes inside
+`registry.access.redhat.com/ubi9/ubi`: podman, buildah and skopeo come from RHEL rather than
+Ubuntu's archive, and `subscription-manager register` inside that container supplies
 entitlement. GitHub offers no RHEL-hosted runner, so this is the closest thing to building on RHEL
 without standing up a self-hosted machine. Both the split and the UBI-builder pattern follow
 [redhat-et/edge-ai-image-pipelines](https://github.com/redhat-et/edge-ai-image-pipelines).
@@ -148,9 +155,9 @@ filesystem needs to be bigger.
 
 ## Local build (subscribed RHEL 9 aarch64 host)
 
-The container build now needs entitlement and a pull secret, so it no longer works on an
-unsubscribed host. On a registered host podman injects the entitlement itself, so only the pull
-secret has to be passed:
+The MicroShift layer needs entitlement, so this does not work on an unsubscribed host. On a
+registered host podman injects the entitlement itself, so only the pull secret has to be
+passed — and the base layer needs neither:
 
 ```
 sudo podman build -t localhost/jetson-orin-bootc-base:dev -f base/Containerfile .
@@ -171,4 +178,3 @@ sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfi
   registry.redhat.io/rhel9/bootc-image-builder:latest \
   --type anaconda-iso --config /config.toml localhost/jetson-orin-bootc-microshift:dev
 ```
-On a registered RHEL host podman mounts the entitlement into the container by itself.
