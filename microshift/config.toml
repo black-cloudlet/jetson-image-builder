@@ -18,14 +18,22 @@ ignoredisk --only-use=nvme0n1
 zerombr
 clearpart --all --initlabel --disklabel=gpt
 reqpart --add-boot
-part pv.01 --grow
+part pv.01 --size=1 --grow
 volgroup rhel pv.01
-# 60 GiB root; swap sized by anaconda. Everything left in the VG stays free on
-# purpose — MicroShift's LVMS carves PVCs out of it (PostgreSQL, RabbitMQ, the
-# model store). A full disk means no dynamic provisioner. Needs an NVMe of
-# roughly 80 GiB or more.
-logvol / --vgname=rhel --name=root --size=61440 --fstype=xfs
-logvol swap --vgname=rhel --name=swap --recommended
+# Sized for the 64 GB target (~59.6 GiB): the ESP and /boot take ~1.6 GiB
+# outside the VG, leaving ~58 GiB in it. A 40 GiB root holds the ~10 GB image
+# cache in /usr, the copy replayed into /var/lib/containers, and a second
+# deployment staged by `bootc upgrade`. The remaining ~18 GiB stays
+# unallocated on purpose — MicroShift's LVMS carves PVCs out of it
+# (PostgreSQL, RabbitMQ, the model store), and a full VG means no dynamic
+# provisioner at all. On a larger device raise this size; the free remainder
+# grows with the disk on its own. xfs grows but never shrinks, so erring small
+# here is the recoverable direction.
+logvol / --vgname=rhel --name=root --size=40960 --fstype=xfs
+# No swap, deliberately. kubelet refuses to start with swap enabled
+# (failSwapOn defaults to true), and `--recommended` sizes swap from RAM —
+# ~15 GiB on the 32 GB SOM, ~31 GiB on a 64 GB one — taken straight out of the
+# extents LVMS needs.
 
 rootpw --lock
 user --name=edge --groups=wheel --iscrypted --password=@EDGE_PASSWORD_HASH@

@@ -147,12 +147,25 @@ already mounted the step warns and continues rather than reformatting something 
 
 ## Storage layout
 
-The kickstart puts `/boot` and the ESP outside LVM, then gives the rest of the NVMe to one volume
-group named `rhel`: a 60 GiB xfs root, swap, and **the remainder left free on purpose**.
+The kickstart puts `/boot` and the ESP outside LVM, then gives the rest of the disk to one volume
+group named `rhel`: a 40 GiB xfs root, no swap, and **the remainder left free on purpose**.
 MicroShift's LVMS provisioner carves PVCs out of that free space, so PostgreSQL, RabbitMQ and the
 model store have somewhere to live. Filling the VG would leave the cluster with no dynamic
-provisioner. This assumes an NVMe of roughly 80 GiB or more; adjust `logvol / --size` if the root
-filesystem needs to be bigger.
+provisioner.
+
+Sized for the 64 GB target: ~59.6 GiB of device, ~1.6 GiB of it spent on the ESP and `/boot`,
+~58 GiB in the VG, 40 GiB root, **~18 GiB free for PVCs**. The root figure is set by what has to
+fit in it — ~10 GB of embedded images in `/usr`, the copy `copy-embedded-images.service` replays
+into `/var/lib/containers`, and a second deployment staged by `bootc upgrade`. On a larger device
+raise `logvol / --size`; the free remainder grows with the disk by itself, since the PV is the only
+partition that grows. xfs grows but never shrinks, so an undersized root is the recoverable
+mistake.
+
+There is no swap on purpose. kubelet's `failSwapOn` defaults to true, so an active swap device is a
+plausible reason for `microshift.service` never to come up; and `logvol swap --recommended` sizes
+swap from RAM rather than from the disk — half of it in the 8–64 GiB band, so ~15 GiB on the 32 GB
+SOM and ~31 GiB on a 64 GB one — taken out of the same extents LVMS provisions from. On this device
+that alone overran the disk.
 
 ## Local build (subscribed RHEL 9 aarch64 host)
 
