@@ -15,11 +15,15 @@ RUN dnf install -y \
     systemctl enable microshift && \
     dnf clean all
 
-# Red Hat's required set: ssh, pod CIDR, OVN link-local gateway. 6443 stays shut
-# — kubectl runs on the node against the kubeadmin kubeconfig.
-RUN firewall-offline-cmd --zone=public --add-port=22/tcp && \
-    firewall-offline-cmd --zone=trusted --add-source=10.42.0.0/16 && \
-    firewall-offline-cmd --zone=trusted --add-source=169.254.169.1
+# Trusted: pod CIDR and the host-endpoint IP are mandatory; the ClusterIP
+# service CIDR is not, but pods reach CoreDNS and the API server through it.
+# Public: 6443 is the MicroShift API, 443 the router's HTTPS.
+RUN firewall-offline-cmd --zone=trusted --add-source=10.42.0.0/16 && \
+    firewall-offline-cmd --zone=trusted --add-source=10.43.0.0/16 && \
+    firewall-offline-cmd --zone=trusted --add-source=169.254.169.1 && \
+    firewall-offline-cmd --zone=public --add-port=22/tcp && \
+    firewall-offline-cmd --zone=public --add-port=443/tcp && \
+    firewall-offline-cmd --zone=public --add-port=6443/tcp
 
 # OVN images need the root subtree shared. Skipped on bare metal, where systemd
 # has already done it.

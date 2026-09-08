@@ -91,6 +91,8 @@ after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UT
 1. Flash QSPI on the station from a **R36.5.x** BSP (same L4T line as the image):
    `sudo ./flash.sh p3737-0000-p3701-0000-qspi external`
 2. `dd` the ISO to a USB key, plug it in with the NVMe fitted, ESC at the NVIDIA logo, pick USB.
+   The firewall opens 22, 443 and 6443 on the public zone, so the API server and the router are
+   reachable from the air-gapped LAN, not just from the node.
 3. Wait for the reboot, then over serial (`ttyTCU0`) or `ssh edge@192.168.1.10`:
    ```
    bootc status

@@ -157,9 +157,11 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   No `dnf`, so neither this nor the base build needs entitlement.
 - `microshift/Containerfile` — `FROM` the apps layer via `ARG BASE_IMAGE`, then MicroShift 4.20 from
   `rhocp-4.20-for-rhel-9-aarch64-rpms` + `fast-datapath-for-rhel-9-aarch64-rpms`
-  (`firewalld jq microshift microshift-release-info`), the mandatory firewall rules, the
+  (`firewalld jq microshift microshift-release-info`), the firewall rules (trusted: pod CIDR
+  `10.42.0.0/16`, service CIDR `10.43.0.0/16`, host-endpoint `169.254.169.1`; public: 22, 443,
+  6443), the
   `microshift-make-rshared.service` OVN needs, and every MicroShift container image embedded
-  into `/usr/lib/containers/storage` with a `microshift.service.d` drop-in that copies them
+  into `/usr/lib/containers-image-cache` with a `microshift.service.d` drop-in that orders them
   into containers-storage before the service starts (the unit itself lives in the apps layer;
   this one only orders against it), plus the NVIDIA device plugin
   (`nvidia-ctk runtime configure --runtime=crio`, the plugin manifest and a kustomization in

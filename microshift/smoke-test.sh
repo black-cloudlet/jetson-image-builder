@@ -21,6 +21,16 @@ for unit in microshift microshift-make-rshared copy-embedded-images; do
 done
 test -f /usr/lib/systemd/system/microshift.service.d/microshift-copy-images.conf
 
+echo "== firewall =="
+ports="$(firewall-offline-cmd --zone=public --list-ports)"
+for p in 22/tcp 443/tcp 6443/tcp; do
+	[[ " $ports " == *" $p "* ]] || { echo "missing public port: $p"; exit 1; }
+done
+sources="$(firewall-offline-cmd --zone=trusted --list-sources)"
+for src in 10.42.0.0/16 10.43.0.0/16 169.254.169.1; do
+	[[ " $sources " == *" $src "* ]] || { echo "missing trusted source: $src"; exit 1; }
+done
+
 echo "== nvidia device plugin =="
 test -f /etc/crio/crio.conf.d/99-nvidia.conf
 test -s /etc/microshift/manifests/nvidia-device-plugin.yml
