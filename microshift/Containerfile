@@ -1,31 +1,12 @@
-# Layer 3 of 3: MicroShift 4.20 on top of the apps layer (apps/Containerfile),
-# which supplies the physically-bound-images scripts, copy-embedded-images.service
-# and any application images.
-#
-# BASE_IMAGE is the reference the apps build pushed. The workflow passes it by
-# digest; the default is for local builds.
+# 3/3. MicroShift 4.20. The apps layer supplies embed_image.sh and
+# copy-embedded-images.service.
 ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-apps:latest
 FROM ${BASE_IMAGE}
 
-# ---------------------------------------------------------------------------
-# MicroShift
-#
-# The RPMs live in entitlement-gated repos. The build therefore has to run on a
-# subscribed host: the workflow runs it inside a UBI container that has done
-# `subscription-manager register`, which writes the entitlement certificates and
-# the /etc/yum.repos.d/redhat.repo that defines the rhocp and fast-datapath
-# repos. Without that registration --enablerepo has nothing to enable.
-# For a local build on a registered RHEL host, podman injects the entitlement by
-# itself and this just works.
-#
-# Deliberately NO `dnf upgrade`. Red Hat's own Containerfile.rhocp runs one,
-# but here it could pull a kernel newer than 5.14.0-687.42.1 and the Tegra
-# kmod is built against that exact build — the GPU would stop working. The
-# base image pins the kernel on purpose; leave it pinned.
-#
-# --enablerepo rather than `dnf config-manager --set-enabled` so the build does
-# not depend on dnf-plugins-core being present in the base image.
-# ---------------------------------------------------------------------------
+# rhocp and fast-datapath are entitlement-gated: the build runs in a registered
+# UBI container, or on a subscribed RHEL host where podman injects entitlement.
+# No `dnf upgrade` — it could pull a kernel past the one the Tegra kmod is built
+# against. --enablerepo avoids depending on dnf-plugins-core in the base.
 ARG USHIFT_VER=4.20
 RUN dnf install -y \
         --enablerepo="rhocp-${USHIFT_VER}-for-rhel-9-$(uname -m)-rpms" \
@@ -34,15 +15,14 @@ RUN dnf install -y \
     systemctl enable microshift && \
     dnf clean all
 
-# Mandatory firewall rules (Red Hat's required set: ssh, pod CIDR, the OVN
-# link-local gateway). Nothing else is opened — kubectl runs on the node
-# against /var/lib/microshift/resources/kubeadmin/kubeconfig, so 6443 stays
-# shut until something actually needs to reach the API from off-box.
+# Red Hat's required set: ssh, pod CIDR, OVN link-local gateway. 6443 stays shut
+# — kubectl runs on the node against the kubeadmin kubeconfig.
 RUN firewall-offline-cmd --zone=public --add-port=22/tcp && \
     firewall-offline-cmd --zone=trusted --add-source=10.42.0.0/16 && \
     firewall-offline-cmd --zone=trusted --add-source=169.254.169.1
 
-# OVN images require the root filesystem subtree to be shared.
+# OVN images need the root subtree shared. Skipped on bare metal, where systemd
+# has already done it.
 RUN printf '[Unit]\n\
 Description=Make root filesystem shared\n\
 Before=microshift.service\n\
@@ -54,23 +34,16 @@ ExecStart=/usr/bin/mount --make-rshared /\n\
 WantedBy=multi-user.target\n' > /usr/lib/systemd/system/microshift-make-rshared.service && \
     systemctl enable microshift-make-rshared.service
 
-# MicroShift must not start before the apps layer's service has replayed the
-# embedded images into containers-storage.
+# Do not start before the apps layer has replayed the embedded images.
 RUN mkdir -p /usr/lib/systemd/system/microshift.service.d && \
     printf '[Unit]\n\
 Requires=copy-embedded-images.service\n\
 After=copy-embedded-images.service\n' \
       > /usr/lib/systemd/system/microshift.service.d/microshift-copy-images.conf
 
-# ---------------------------------------------------------------------------
-# NVIDIA device plugin
-#
-# CRI-O has to know about the NVIDIA runtime before a pod can ask for a GPU.
-# The plugin itself is dropped into /etc/microshift/manifests, which MicroShift
-# applies through kustomize on first start.
-# ---------------------------------------------------------------------------
+# CRI-O needs the NVIDIA runtime before a pod can request a GPU. MicroShift
+# applies the manifest through kustomize on first start.
 ARG NVIDIA_DEVICE_PLUGIN_VER=v0.17.1
-
 RUN nvidia-ctk runtime configure --runtime=crio --set-as-default \
         --config=/etc/crio/crio.conf.d/99-nvidia.conf
 
@@ -83,11 +56,8 @@ kind: Kustomization\n\
 resources:\n\
   - nvidia-device-plugin.yml\n' > /etc/microshift/manifests/kustomization.yaml
 
-# ---------------------------------------------------------------------------
-# Embed this layer's images: MicroShift's control plane (etcd, kube-apiserver,
-# OVN, CoreDNS, service-ca, CSI) and the device plugin referenced by the
-# manifest above. Uses the apps layer's embed_image.sh and cache.
-# ---------------------------------------------------------------------------
+# MicroShift's control plane, plus the device plugin image named by the manifest
+# (which uses "- image:" list form, hence the field scan).
 RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
     images="$(jq -r '.images[]' /usr/share/microshift/release/release-"$(uname -m)".json)" ; \
     images="${images} $(awk '{for(i=1;i<NF;i++) if($i=="image:"){gsub(/"/,"",$(i+1)); print $(i+1)}}' \

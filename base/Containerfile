@@ -1,16 +1,9 @@
-# Layer 1 of 3: the vendor image, republished under our own name.
+# 1/3. The vendor image republished under our own name: the pin lives in one
+# place, and the air-gapped mirror gets a name we control.
 #
-# This adds nothing on purpose. It exists so the pinned JetPack-for-RHEL
-# reference lives in exactly one file, and so there is a stable internal name to
-# mirror into the air-gapped registry — images go to GHCR and are moved across by
-# hand. Every variant chain starts here: base -> apps -> <variant>.
-#
-# The base already carries RHEL 9.8, kernel 5.14.0-687.42.1.el9_8, JetPack 6.2.2
-# / L4T r36.5.0, the Tegra kmods, the CUDA/JetPack userspace and the nvidia-ctk
-# CDI unit. Nothing NVIDIA-related should ever be added on top of it.
-#
-# Never move this to a floating tag. The Tegra kmod is built against that exact
-# kernel build, so an unpinned base is a silent GPU break.
+# Pinned deliberately — the Tegra kmod is built against this exact kernel, so a
+# floating tag is a silent GPU break. Adds nothing: the base already carries the
+# kmods, CUDA userspace and nvidia-ctk.
 ARG BASE=quay.io/redhat-user-workloads/jetpack-for-rhel-tenant/rhel-98-bootc:6.2.2_5.14.0-687.42.1_090326003719
 FROM ${BASE}
 
