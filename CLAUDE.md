@@ -203,7 +203,10 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   smoke-test inside the result, push `ghcr.io/<owner>/jetson-orin-bootc-<name>:<YYYYMMDD-sha8>`
   + `latest`, and output the ref pinned by digest (`podman push --digestfile`).
   `.github/workflows/build-iso.yml` — **reusable**:
-  register, `sed` the two placeholders into `<variant>/config.toml`, run
+  register, substitute the two `@EDGE_*@` placeholders into `<variant>/config.toml` (in bash,
+  not `sed`, with the secrets in `env:` — an `&`, a quote or a newline in a value would
+  otherwise mangle the kickstart or break the command) after rejecting an empty or
+  non-crypt `EDGE_PASSWORD_HASH`, run
   `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso` with
   `/etc/pki/entitlement` and `/etc/rhsm` bind-mounted, upload `*.iso` + `SHA256SUMS`.
 

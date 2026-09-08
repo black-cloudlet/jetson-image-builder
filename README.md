@@ -66,7 +66,12 @@ L4T line as the image built here — before a device can boot this ISO.
 | `RHSM_USERNAME` / `RHSM_PASSWORD` | Red Hat account — both jobs register with subscription-manager for the MicroShift RPMs and bib's Anaconda depsolve |
 | `OPENSHIFT_PULL_SECRET` | pull secret JSON from console.redhat.com/openshift/install/pull-secret — pulls MicroShift's and the device plugin's container images at build time |
 | `EDGE_SSH_PUBKEY` | public key for the `edge` user |
-| `EDGE_PASSWORD_HASH` | `openssl passwd -6` output for the `edge` user |
+| `EDGE_PASSWORD_HASH` | `openssl passwd -6` output for the `edge` user — the hash, not the password |
+
+Both `EDGE_*` secrets are validated before bib runs: unset, empty, multi-line, or a plaintext
+password where a `$6$salt$hash` is expected fails the ISO job at the render step. The kickstart
+uses `--iscrypted`, so a plaintext value would install an account nobody can log into, and an
+empty one an account with no password at all — neither is visible until the ISO is booted.
 
 Entitlement comes from registering inside the build container, not from a certificate tarball —
 nothing expires in a secret, and `redhat.repo` is generated fresh by the registration. Each run
