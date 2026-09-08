@@ -64,7 +64,7 @@ L4T line as the image built here — before a device can boot this ISO.
 | secret | purpose |
 |---|---|
 | `RH_REGISTRY_USER` / `RH_REGISTRY_TOKEN` | pull `registry.redhat.io/rhel9/bootc-image-builder` (Registry Service Account) |
-| `RHT_ORGID` / `RHT_ACT_KEY` | organisation ID and activation key — both jobs register with subscription-manager for the MicroShift RPMs and bib's Anaconda depsolve |
+| `RHSM_USERNAME` / `RHSM_PASSWORD` | Red Hat account — both jobs register with subscription-manager for the MicroShift RPMs and bib's Anaconda depsolve |
 | `OPENSHIFT_PULL_SECRET` | pull secret JSON from console.redhat.com/openshift/install/pull-secret — pulls MicroShift's and the device plugin's container images at build time |
 | `EDGE_SSH_PUBKEY` | public key for the `edge` user |
 | `EDGE_PASSWORD_HASH` | `openssl passwd -6` output for the `edge` user |
@@ -74,6 +74,12 @@ nothing expires in a secret, and `redhat.repo` is generated fresh by the registr
 consumes a subscription slot and releases it again in an `if: always()` unregister step. The
 subscription has to carry an OpenShift entitlement or `rhocp-4.20-for-rhel-9-aarch64-rpms` never
 appears and the build fails at `--enablerepo`.
+
+Two things to know about using an account password here. It is a broader credential than an
+organisation ID plus activation key, which can only attach subscriptions — if it leaks, so does
+portal access. And an account with SSO or two-factor cannot register this way at all; that is the
+case where activation keys are the only option. If your organisation has Simple Content Access
+turned off, add `--auto-attach` to the register command or no repositories will be entitled.
 
 The pull secret is used only during the build; it is not written into the OS image.
 

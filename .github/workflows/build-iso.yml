@@ -50,7 +50,10 @@ jobs:
           mv /tmp/policy.json /etc/containers/policy.json
 
       - name: Register with Red Hat
-        run: subscription-manager register --org="${{ secrets.RHT_ORGID }}" --activationkey="${{ secrets.RHT_ACT_KEY }}"
+        env:
+          RHSM_USERNAME: ${{ secrets.RHSM_USERNAME }}
+          RHSM_PASSWORD: ${{ secrets.RHSM_PASSWORD }}
+        run: subscription-manager register --username="$RHSM_USERNAME" --password="$RHSM_PASSWORD"
 
       - name: Move container storage and ISO output onto the scratch disk
         run: |

@@ -68,7 +68,10 @@ jobs:
 
       - name: Register with Red Hat
         if: inputs.needs-entitlement
-        run: subscription-manager register --org="${{ secrets.RHT_ORGID }}" --activationkey="${{ secrets.RHT_ACT_KEY }}"
+        env:
+          RHSM_USERNAME: ${{ secrets.RHSM_USERNAME }}
+          RHSM_PASSWORD: ${{ secrets.RHSM_PASSWORD }}
+        run: subscription-manager register --username="$RHSM_USERNAME" --password="$RHSM_PASSWORD"
 
       - name: Move container storage onto the scratch disk
         run: |

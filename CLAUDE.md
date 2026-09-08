@@ -206,14 +206,18 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso` with
   `/etc/pki/entitlement` and `/etc/rhsm` bind-mounted, upload `*.iso` + `SHA256SUMS`.
 
-Secrets: `RH_REGISTRY_USER`, `RH_REGISTRY_TOKEN` (bib image pull), `RHT_ORGID`/`RHT_ACT_KEY`
+Secrets: `RH_REGISTRY_USER`, `RH_REGISTRY_TOKEN` (bib image pull), `RHSM_USERNAME`/`RHSM_PASSWORD`
 (both jobs `subscription-manager register` inside the UBI builder, and unregister in an
 `if: always()` step), `OPENSHIFT_PULL_SECRET` (pulls MicroShift's and the device plugin's
 container images at build time; never written into the OS image), `EDGE_SSH_PUBKEY`,
 `EDGE_PASSWORD_HASH` (`openssl passwd -6`). The entitlement-certificate tarball
-(`RHSM_ENTITLEMENT_TGZ_B64`) was replaced by activation-key registration: nothing expires inside
-a secret and `redhat.repo` is generated fresh by the registration. Cost is a subscription slot
-per run. The subscription must carry an OpenShift entitlement or
+(`RHSM_ENTITLEMENT_TGZ_B64`) was replaced by registration: nothing expires inside a secret and
+`redhat.repo` is generated fresh by the registration. Cost is a subscription slot per run.
+Registration uses an account username and password by maintainer preference; an org ID plus
+activation key is the narrower credential and the only option for SSO or 2FA accounts, so revisit
+this if the account gains either. Credentials are passed through `env:` rather than interpolated
+into the command, so a password containing a quote or `$` cannot break the shell. With Simple
+Content Access off, the register call needs `--auto-attach`. The subscription must carry an OpenShift entitlement or
 `rhocp-4.20-for-rhel-9-aarch64-rpms` never appears and the build fails at `--enablerepo`.
 A self-hosted registered RHEL 9 aarch64 runner would remove the registration step too.
 
