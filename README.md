@@ -65,8 +65,8 @@ L4T line as the image built here — before a device can boot this ISO.
 | `RH_REGISTRY_USER` / `RH_REGISTRY_PASSWORD` | pull `registry.redhat.io/rhel9/bootc-image-builder` |
 | `RHSM_USERNAME` / `RHSM_PASSWORD` | Red Hat account — both jobs register with subscription-manager for the MicroShift RPMs and bib's Anaconda depsolve |
 | `OPENSHIFT_PULL_SECRET` | pull secret JSON from console.redhat.com/openshift/install/pull-secret — pulls MicroShift's and the device plugin's container images at build time |
-| `EDGE_SSH_PUBKEY` | public key for the `edge` user |
-| `EDGE_PASSWORD_HASH` | `openssl passwd -6` output for the `edge` user — the hash, not the password |
+| `EDGE_SSH_PUBKEY` | public key for the `jetson` user |
+| `EDGE_PASSWORD_HASH` | `openssl passwd -6` output for the `jetson` user — the hash, not the password |
 
 Both `EDGE_*` secrets are validated before bib runs: unset, empty, multi-line, or a plaintext
 password where a `$6$salt$hash` is expected fails the ISO job at the render step. The kickstart
@@ -97,7 +97,7 @@ secret — kept separate so `RH_REGISTRY_*` can hold a narrow Registry Service A
 ## Install
 
 The kickstart in `microshift/config.toml` is fully unattended: it wipes `nvme0n1` only (the USB
-key and eMMC are ignored), creates `edge` in `wheel`, locks root, and reboots ejecting the media.
+key and eMMC are ignored), creates `jetson` in `wheel`, locks root, and reboots ejecting the media.
 Booting it on a device with data on the NVMe is destructive.
 
 The network is **static**: the device comes up as `Jetson` on `192.168.1.10/24` via
@@ -108,7 +108,7 @@ after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UT
 1. Flash QSPI on the station from a **R36.5.x** BSP (same L4T line as the image):
    `sudo ./flash.sh p3737-0000-p3701-0000-qspi external`
 2. `dd` the ISO to a USB key, plug it in with the NVMe fitted, ESC at the NVIDIA logo, pick USB.
-3. Wait for the reboot, then over serial (`ttyTCU0`) or `ssh edge@192.168.1.10`:
+3. Wait for the reboot, then over serial (`ttyTCU0`) or `ssh jetson@192.168.1.10`:
    ```
    bootc status
    cat /etc/nv_tegra_release

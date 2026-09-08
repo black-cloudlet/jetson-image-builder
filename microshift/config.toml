@@ -28,8 +28,8 @@ logvol / --vgname=rhel --name=root --size=61440 --fstype=xfs
 logvol swap --vgname=rhel --name=swap --recommended
 
 rootpw --lock
-user --name=edge --groups=wheel --iscrypted --password=@EDGE_PASSWORD_HASH@
-sshkey --username=edge "@EDGE_SSH_PUBKEY@"
+user --name=jetson --groups=wheel --iscrypted --password=@EDGE_PASSWORD_HASH@
+sshkey --username=jetson "@EDGE_SSH_PUBKEY@"
 
 reboot --eject
 """

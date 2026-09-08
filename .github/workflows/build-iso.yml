@@ -80,7 +80,7 @@ jobs:
 
       # Validate before bib runs. An empty or plaintext EDGE_PASSWORD_HASH still
       # renders a complete kickstart, so the only symptom is a finished ISO whose
-      # `edge` account cannot be logged into -- an hour of build for nothing, and
+      # `jetson` account cannot be logged into -- an hour of build for nothing, and
       # `--password=` with `--iscrypted` leaves the account with no password at all.
       #
       # Secrets go through env: rather than being interpolated into the script, and

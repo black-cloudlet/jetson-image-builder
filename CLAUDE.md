@@ -192,7 +192,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   the NVMe holding a 60 GiB xfs root and swap, **with the remaining extents left free for
   MicroShift's LVMS provisioner** (fill the VG and the cluster has no dynamic PV source, so
   PostgreSQL/RabbitMQ/the model store have nowhere to go; assumes an NVMe ≳80 GiB), root
-  locked, user `edge` in `wheel` from `@EDGE_SSH_PUBKEY@` /
+  locked, user `jetson` in `wheel` from `@EDGE_SSH_PUBKEY@` /
   `@EDGE_PASSWORD_HASH@` placeholders, `reboot --eject`. ISO label `JETSON_ORIN_BOOTC`.
   The static address and hostname are baked into the ISO: two devices imaged from the same ISO
   collide on one segment. `--nameserver` is deliberately absent — the network is air-gapped and
