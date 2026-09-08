@@ -1,72 +1,17 @@
-# Shared foundation for every Kubernetes variant.
+# Layer 1 of 3: the vendor image, republished under our own name.
 #
-# The base is Red Hat's JetPack-for-RHEL image: RHEL 9.8, kernel
-# 5.14.0-687.42.1.el9_8, JetPack 6.2.2 / L4T r36.5.0, Tegra kmods,
-# CUDA/JetPack userspace, nvidia-ctk CDI unit. Nothing NVIDIA-related needs to
-# be added.
+# This adds nothing on purpose. It exists so the pinned JetPack-for-RHEL
+# reference lives in exactly one file, and so there is a stable internal name to
+# mirror into the air-gapped registry — images go to GHCR and are moved across by
+# hand. Every variant chain starts here: base -> apps -> <variant>.
 #
-# This layer carries only what every variant needs: the machinery for
-# physically bound images, and the application images that ride along
-# regardless of which Kubernetes distribution sits on top. Variants
-# (microshift/, later k3s/) build FROM the image this produces.
+# The base already carries RHEL 9.8, kernel 5.14.0-687.42.1.el9_8, JetPack 6.2.2
+# / L4T r36.5.0, the Tegra kmods, the CUDA/JetPack userspace and the nvidia-ctk
+# CDI unit. Nothing NVIDIA-related should ever be added on top of it.
 #
-# Splitting here is about rebuild cost. The variant layer pulls a Kubernetes
-# distribution's whole control plane — MicroShift's is nine images — and that
-# should not be redone every time an application image or a model changes.
-# Structure follows redhat-et/edge-ai-image-pipelines' Containerfile.podman.
+# Never move this to a floating tag. The Tegra kmod is built against that exact
+# kernel build, so an unpinned base is a silent GPU break.
 ARG BASE=quay.io/redhat-user-workloads/jetpack-for-rhel-tenant/rhel-98-bootc:6.2.2_5.14.0-687.42.1_090326003719
 FROM ${BASE}
-
-# ---------------------------------------------------------------------------
-# Physically bound images
-#
-# The nodes have no network at first boot, so every image anything on the
-# device needs has to already be on disk. A build cannot simply `podman pull`:
-# that is overlayfs on overlayfs. Forcing the vfs driver instead costs image
-# size x layer count. So images are skopeo-copied into a plain directory at
-# build time and replayed into containers-storage at boot.
-#
-# The cache is /usr/lib/containers-image-cache rather than a real containers
-# storage path, because an image upgrade overwrites an additional store
-# (RHEL-75827).
-#
-# Scripts and approach from redhat-et/edge-ai-image-pipelines (Apache-2.0).
-# ---------------------------------------------------------------------------
-COPY --chmod=0555 physically-bound-images/embed_image.sh \
-      /opt/physically-bound-images/embed_image.sh
-COPY --chmod=0555 physically-bound-images/copy_embedded_images.sh \
-      /opt/physically-bound-images/copy_embedded_images.sh
-
-# Variants order their own services after this one; see microshift/Containerfile.
-#
-# No network-online dependency: the copy reads local disk only, and waiting for
-# a carrier that is never coming would add NetworkManager-wait-online's timeout
-# to every boot of a disconnected node.
-RUN printf '[Unit]\n\
-Description=Copy embedded container images into containers-storage\n\
-Wants=basic.target\n\
-After=basic.target local-fs.target\n\
-[Service]\n\
-Type=oneshot\n\
-ExecStart=/opt/physically-bound-images/copy_embedded_images.sh\n\
-RemainAfterExit=yes\n\
-[Install]\n\
-WantedBy=multi-user.target\n' > /usr/lib/systemd/system/copy-embedded-images.service && \
-    systemctl enable copy-embedded-images.service
-
-# ---------------------------------------------------------------------------
-# Application images
-#
-# Whitespace-delimited lists of image references to bake in. Empty today:
-# PostgreSQL, RabbitMQ, KServe and the model server land here, and pinning them
-# by digest is what makes a rebuild reproducible.
-# ---------------------------------------------------------------------------
-ARG APP_IMAGES=""
-
-RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
-    for img in ${APP_IMAGES} ; do \
-        /opt/physically-bound-images/embed_image.sh "${img}" \
-            --authfile /run/secrets/pull-secret.json ; \
-    done
 
 RUN bootc container lint

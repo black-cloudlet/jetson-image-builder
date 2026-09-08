@@ -1,6 +1,7 @@
-# MicroShift variant: base layer -> MicroShift layer -> installer ISO.
-# Each layer is pushed separately and the next builds on its digest, so a
-# change to an application image does not re-pull MicroShift's control plane.
+# MicroShift variant: base -> apps -> microshift -> installer ISO.
+# Each layer is pushed separately and the next builds on its digest, so a change
+# to an application image does not re-pull MicroShift's control plane, and a
+# MicroShift change does not re-pull the application images.
 name: microshift image + installer ISO
 
 on:
@@ -8,6 +9,7 @@ on:
     branches: [main]
     paths:
       - base/**
+      - apps/**
       - microshift/**
       - physically-bound-images/**
       - .github/workflows/build-microshift.yml
@@ -16,7 +18,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  # No dnf against RHEL repos here, so no subscription slot is consumed.
+  # Republishes the pinned vendor image under our own name. Adds nothing, runs
+  # no dnf, so no subscription slot is consumed.
   base:
     uses: ./.github/workflows/build-image.yml
     with:
@@ -27,14 +30,28 @@ jobs:
     secrets: inherit
     permissions: { contents: read, packages: write }
 
-  microshift:
+  # Embedding machinery and application images. Shared by every variant, and
+  # likewise no dnf.
+  apps:
     needs: base
+    uses: ./.github/workflows/build-image.yml
+    with:
+      name: apps
+      containerfile: apps/Containerfile
+      smoke-test: apps/smoke-test.sh
+      build-args: BASE_IMAGE=${{ needs.base.outputs.image-ref }}
+      needs-entitlement: false
+    secrets: inherit
+    permissions: { contents: read, packages: write }
+
+  microshift:
+    needs: apps
     uses: ./.github/workflows/build-image.yml
     with:
       name: microshift
       containerfile: microshift/Containerfile
       smoke-test: microshift/smoke-test.sh
-      build-args: BASE_IMAGE=${{ needs.base.outputs.image-ref }}
+      build-args: BASE_IMAGE=${{ needs.apps.outputs.image-ref }}
     secrets: inherit
     permissions: { contents: read, packages: write }
 

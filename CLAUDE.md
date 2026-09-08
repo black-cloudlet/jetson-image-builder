@@ -105,12 +105,15 @@ Target stack on the device:
    way. The runner's `/dev/nvme0n1` scratch disk is formatted and `/var/lib/containers`,
    `/var/tmp` and the ISO output are moved onto it — ~10 GB of embedded images plus a
    multi-gigabyte ISO does not fit in the job container's writable layer.
-7. **Two layers, one directory per Kubernetes variant.** `base/` carries the
-   physically-bound-images machinery and the application images every variant needs;
-   `microshift/` builds `FROM` it and adds MicroShift, the device plugin and their images.
-   `k3s/` is expected beside `microshift/`. The split is about rebuild cost: a variant layer
-   pulls a whole control plane (MicroShift's is nine images) and that should not be redone
-   whenever an application image or a model changes. Each layer is pushed separately as
+7. **Three layers, one directory per Kubernetes variant.** `base/` republishes the pinned
+   vendor image under our own name and adds nothing — it exists so the pin lives in one file
+   and so there is a stable internal name to mirror into the air-gapped registry. `apps/`
+   builds `FROM` it with the physically-bound-images machinery and the application images every
+   variant needs. `microshift/` builds `FROM` that and adds MicroShift, the device plugin and
+   their images. `k3s/` is expected beside `microshift/`, reusing `base` and `apps` untouched.
+   The split is about rebuild cost: a variant layer pulls a whole control plane (MicroShift's is
+   nine images) and that should not be redone whenever an application image or a model changes.
+   Each layer is pushed separately as
    `jetson-orin-bootc-<name>` and the next builds on its **digest**, not its tag. CI is two
    reusable workflows — `build-image.yml` (one layer) and `build-iso.yml` — plus a caller per
    variant chaining base → variant → ISO. Shared tooling (`physically-bound-images/`) stays at
@@ -146,16 +149,18 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
 
 ### bootc image + installer ISO pipeline (`microshift/`, `physically-bound-images/`, `.github/workflows/`)
 
-- `base/Containerfile` — `FROM` the pinned JetPack-for-RHEL image; installs the
+- `base/Containerfile` — `FROM` the pinned JetPack-for-RHEL image and nothing else, plus
+  `bootc container lint`. Republished as `jetson-orin-bootc-base`.
+- `apps/Containerfile` — `FROM` the base layer via `ARG BASE_IMAGE`; installs the
   physically-bound-images scripts and `copy-embedded-images.service`, and embeds whatever
   `APP_IMAGES` names (empty today; PostgreSQL, RabbitMQ, KServe and the model server go here).
-  No `dnf`, so its build needs no entitlement.
-- `microshift/Containerfile` — `FROM` the base layer via `ARG BASE_IMAGE`, then MicroShift 4.20 from
+  No `dnf`, so neither this nor the base build needs entitlement.
+- `microshift/Containerfile` — `FROM` the apps layer via `ARG BASE_IMAGE`, then MicroShift 4.20 from
   `rhocp-4.20-for-rhel-9-aarch64-rpms` + `fast-datapath-for-rhel-9-aarch64-rpms`
   (`firewalld jq microshift microshift-release-info`), the mandatory firewall rules, the
   `microshift-make-rshared.service` OVN needs, and every MicroShift container image embedded
   into `/usr/lib/containers/storage` with a `microshift.service.d` drop-in that copies them
-  into containers-storage before the service starts (the unit itself lives in the base layer;
+  into containers-storage before the service starts (the unit itself lives in the apps layer;
   this one only orders against it), plus the NVIDIA device plugin
   (`nvidia-ctk runtime configure --runtime=crio`, the plugin manifest and a kustomization in
   `/etc/microshift/manifests`, and the plugin image embedded alongside MicroShift's).

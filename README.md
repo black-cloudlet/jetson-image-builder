@@ -11,28 +11,42 @@ registry reachable. Today there is one variant, `microshift/`; `k3s/` is expecte
 Building a variant pushes `ghcr.io/black-cloudlet/jetson-orin-bootc-<variant>:<YYYYMMDD-sha8>`
 and uploads an installer ISO as a workflow artifact.
 
-Each variant is built as **two layers**: a shared `base/` carrying the embedding machinery and
-the application images, and a variant layer adding the Kubernetes distribution on top. They are
-pushed as separate images and the variant builds on the base's digest, so changing an application
-image or a model does not re-pull MicroShift's nine control-plane images.
+Each variant is built as **three layers**, each pushed separately and each building on the
+previous one's digest:
+
+```
+base   the pinned vendor image, republished under our own name
+  |
+apps   physically-bound-images machinery + APP_IMAGES
+  |
+microshift   MicroShift 4.20 + NVIDIA device plugin + their images
+  |
+ISO
+```
+
+Changing an application image rebuilds `apps` and above but not `base`; changing the MicroShift
+version rebuilds only the top layer and does not re-pull the application images. A future `k3s/`
+reuses `base` and `apps` untouched.
 
 | Path | Does |
 | ---- | ---- |
-| `base/Containerfile` | pinned JetPack-for-RHEL base + physically-bound-images machinery + `APP_IMAGES` |
-| `base/smoke-test.sh` | checks run inside the base image before it is pushed |
-| `microshift/Containerfile` | `FROM` the base + MicroShift 4.20 + NVIDIA device plugin + their images |
+| `base/Containerfile` | the pinned JetPack-for-RHEL image, republished; adds nothing |
+| `base/smoke-test.sh` | checks the vendor image is still what CLAUDE.md says it is |
+| `apps/Containerfile` | `FROM` base + physically-bound-images machinery + `APP_IMAGES` |
+| `apps/smoke-test.sh` | checks the embedding machinery and any embedded application images |
+| `microshift/Containerfile` | `FROM` apps + MicroShift 4.20 + NVIDIA device plugin + their images |
 | `microshift/config.toml` | bootc-image-builder config — the unattended kickstart and the ISO label |
 | `microshift/smoke-test.sh` | checks run inside the finished image before it is pushed |
 | `physically-bound-images/` | shared scripts: embed at build time, replay into containers-storage at boot |
 | `.github/workflows/build-image.yml` | reusable — builds and pushes one layer |
 | `.github/workflows/build-iso.yml` | reusable — turns a pushed image into an installer ISO |
-| `.github/workflows/build-microshift.yml` | caller — chains base → microshift → ISO |
+| `.github/workflows/build-microshift.yml` | caller — chains base → apps → microshift → ISO |
 
 ### Adding a variant
 
-Create `<name>/` with a `Containerfile` (`FROM` the base via an `ARG BASE_IMAGE`), a
-`config.toml` and a `smoke-test.sh`, then copy `build-microshift.yml` and point its `microshift`
-and `iso` jobs at the new directory. The `base` job is reused unchanged.
+Create `<name>/` with a `Containerfile` (`FROM` the apps layer via an `ARG BASE_IMAGE`), a
+`config.toml` and a `smoke-test.sh`, then copy `build-microshift.yml` and point its top job and
+`iso` job at the new directory. The `base` and `apps` jobs are reused unchanged.
 
 Nothing in the reusable workflows is MicroShift-specific: layer-shaped checks live in each
 layer's own `smoke-test.sh`, and the kickstart in the variant's own `config.toml` (MicroShift's
@@ -131,12 +145,14 @@ unsubscribed host. On a registered host podman injects the entitlement itself, s
 secret has to be passed:
 
 ```
-sudo podman build \
-  --secret id=pullsecret,src=$HOME/pull-secret.json \
-  -t localhost/jetson-orin-bootc-base:dev -f base/Containerfile .
+sudo podman build -t localhost/jetson-orin-bootc-base:dev -f base/Containerfile .
 sudo podman build \
   --secret id=pullsecret,src=$HOME/pull-secret.json \
   --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-base:dev \
+  -t localhost/jetson-orin-bootc-apps:dev -f apps/Containerfile .
+sudo podman build \
+  --secret id=pullsecret,src=$HOME/pull-secret.json \
+  --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-apps:dev \
   -t localhost/jetson-orin-bootc-microshift:dev -f microshift/Containerfile .
 sed -e "s|@EDGE_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
     -e "s|@EDGE_PASSWORD_HASH@|$(openssl passwd -6)|" microshift/config.toml > /tmp/config.toml

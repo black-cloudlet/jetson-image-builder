@@ -1,10 +1,10 @@
-# MicroShift 4.20 on top of the shared base layer (base/Containerfile), which
-# supplies the physically-bound-images scripts, copy-embedded-images.service
+# Layer 3 of 3: MicroShift 4.20 on top of the apps layer (apps/Containerfile),
+# which supplies the physically-bound-images scripts, copy-embedded-images.service
 # and any application images.
 #
-# BASE_IMAGE is the reference the base build pushed. The workflow passes it by
+# BASE_IMAGE is the reference the apps build pushed. The workflow passes it by
 # digest; the default is for local builds.
-ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-base:latest
+ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-apps:latest
 FROM ${BASE_IMAGE}
 
 # ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ ExecStart=/usr/bin/mount --make-rshared /\n\
 WantedBy=multi-user.target\n' > /usr/lib/systemd/system/microshift-make-rshared.service && \
     systemctl enable microshift-make-rshared.service
 
-# MicroShift must not start before the base layer's service has replayed the
+# MicroShift must not start before the apps layer's service has replayed the
 # embedded images into containers-storage.
 RUN mkdir -p /usr/lib/systemd/system/microshift.service.d && \
     printf '[Unit]\n\
@@ -86,7 +86,7 @@ resources:\n\
 # ---------------------------------------------------------------------------
 # Embed this layer's images: MicroShift's control plane (etcd, kube-apiserver,
 # OVN, CoreDNS, service-ca, CSI) and the device plugin referenced by the
-# manifest above. Uses the base layer's embed_image.sh and cache.
+# manifest above. Uses the apps layer's embed_image.sh and cache.
 # ---------------------------------------------------------------------------
 RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
     images="$(jq -r '.images[]' /usr/share/microshift/release/release-"$(uname -m)".json)" ; \
