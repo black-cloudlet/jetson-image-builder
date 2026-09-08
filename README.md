@@ -4,17 +4,31 @@ bootc image and unattended installer ISO for NVIDIA Jetson AGX Orin edge nodes r
 image mode (aarch64), for deployment into a disconnected environment.
 
 The device OS is Red Hat's JetPack-for-RHEL bootc image (RHEL 9.8, JetPack 6.2.2 / L4T r36.5.0,
-kernel 5.14.0-687.42.1). `Containerfile` derives from it and layers MicroShift 4.20 on top, with
-every MicroShift container image embedded so the cluster starts with no registry reachable. `.github/workflows/build-bootc.yml` builds the image on a native arm64
-runner, pushes it to `ghcr.io/black-cloudlet/jetson-orin-bootc:<YYYYMMDD-sha8>`, then runs
-`bootc-image-builder --type anaconda-iso` and uploads the ISO as a workflow artifact.
+kernel 5.14.0-687.42.1). Each **variant** is a directory deriving from it and layering on a
+Kubernetes distribution, with every container image embedded so the cluster starts with no
+registry reachable. Today there is one variant, `microshift/`; `k3s/` is expected beside it.
 
-| File | Does |
+Building a variant pushes `ghcr.io/black-cloudlet/jetson-orin-bootc-<variant>:<YYYYMMDD-sha8>`
+and uploads an installer ISO as a workflow artifact.
+
+| Path | Does |
 | ---- | ---- |
-| `Containerfile` | pinned JetPack-for-RHEL base + MicroShift 4.20 + NVIDIA device plugin + embedded images |
-| `physically-bound-images/` | embed images at build time, replay them into containers-storage at boot |
-| `config.toml` | bootc-image-builder config — the unattended kickstart and the ISO label |
-| `.github/workflows/build-bootc.yml` | build + smoke test + push to GHCR, then build the ISO |
+| `microshift/Containerfile` | pinned JetPack-for-RHEL base + MicroShift 4.20 + NVIDIA device plugin + embedded images |
+| `microshift/config.toml` | bootc-image-builder config — the unattended kickstart and the ISO label |
+| `microshift/smoke-test.sh` | checks run inside the built image before it is pushed |
+| `physically-bound-images/` | shared: embed images at build time, replay them into containers-storage at boot |
+| `.github/workflows/build-bootc-image.yml` | reusable — builds any variant and its ISO |
+| `.github/workflows/build-microshift.yml` | thin caller for the `microshift` variant |
+
+### Adding a variant
+
+Create `<name>/` with a `Containerfile`, a `config.toml` and a `smoke-test.sh`, then add a caller
+workflow mirroring `build-microshift.yml` with `variant: <name>`. The build context is the
+repository root, so a variant's Containerfile can `COPY physically-bound-images/...` the way the
+MicroShift one does. Nothing in the reusable workflow is MicroShift-specific: variant-shaped
+checks live in the variant's own `smoke-test.sh`, and the kickstart in its own `config.toml`
+(MicroShift's leaves free extents for LVMS; k3s, whose local-path provisioner just uses a
+directory, would not need to).
 
 Provisioning the flashing station and flashing the Jetson QSPI are a separate concern and live in
 **[black-cloudlet/jetson-installer-config](https://github.com/black-cloudlet/jetson-installer-config)**
@@ -41,7 +55,7 @@ The pull secret is used only during the build; it is not written into the OS ima
 
 ## Install
 
-The kickstart in `config.toml` is fully unattended: it wipes `nvme0n1` only (the USB key and
+The kickstart in `microshift/config.toml` is fully unattended: it wipes `nvme0n1` only (the USB key and
 eMMC are ignored), creates `edge` in `wheel`, locks root, and reboots ejecting the media.
 Booting it on a device with data on the NVMe is destructive.
 
@@ -77,11 +91,13 @@ after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UT
 
 ## Where the build runs
 
-`runs-on: ubuntu-24.04-arm` for a native arm64 machine, but every step executes inside
-`registry.access.redhat.com/ubi9/ubi`: podman, buildah and skopeo come from RHEL rather than
-Ubuntu's archive, and `subscription-manager register` inside that container supplies entitlement.
-GitHub offers no RHEL-hosted runner, so this is the closest thing to building on RHEL without
-standing up a self-hosted machine.
+`build-bootc-image.yml` is reusable (`workflow_call`) and takes a `variant` input; each variant
+gets a thin caller. `runs-on: ubuntu-24.04-arm` for a native arm64 machine, but every step
+executes inside `registry.access.redhat.com/ubi9/ubi`: podman, buildah and skopeo come from RHEL
+rather than Ubuntu's archive, and `subscription-manager register` inside that container supplies
+entitlement. GitHub offers no RHEL-hosted runner, so this is the closest thing to building on RHEL
+without standing up a self-hosted machine. Both the split and the UBI-builder pattern follow
+[redhat-et/edge-ai-image-pipelines](https://github.com/redhat-et/edge-ai-image-pipelines).
 
 The runner's scratch disk (`/dev/nvme0n1`) is formatted and `/var/lib/containers`, `/var/tmp` and
 the ISO output directory are moved onto it. Roughly 10 GB of embedded container images plus a
@@ -106,14 +122,14 @@ secret has to be passed:
 ```
 sudo podman build \
   --secret id=pullsecret,src=$HOME/pull-secret.json \
-  -t localhost/jetson-orin-bootc:dev .
+  -t localhost/jetson-orin-bootc-microshift:dev -f microshift/Containerfile .
 sed -e "s|@EDGE_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
-    -e "s|@EDGE_PASSWORD_HASH@|$(openssl passwd -6)|" config.toml > /tmp/config.toml
+    -e "s|@EDGE_PASSWORD_HASH@|$(openssl passwd -6)|" microshift/config.toml > /tmp/config.toml
 mkdir output
 sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfined_t \
   -v /tmp/config.toml:/config.toml:ro -v ./output:/output \
   -v /var/lib/containers/storage:/var/lib/containers/storage \
   registry.redhat.io/rhel9/bootc-image-builder:latest \
-  --type anaconda-iso --config /config.toml localhost/jetson-orin-bootc:dev
+  --type anaconda-iso --config /config.toml localhost/jetson-orin-bootc-microshift:dev
 ```
 On a registered RHEL host podman mounts the entitlement into the container by itself.

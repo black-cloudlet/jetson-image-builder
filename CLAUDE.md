@@ -3,8 +3,8 @@
 Provisioning and image pipeline for NVIDIA Jetson AGX Orin edge nodes running RHEL image mode
 (bootc) in a disconnected environment. Read this whole file before touching anything.
 
-**Two repos.** This one holds the image pipeline (`Containerfile`, `config.toml`,
-`.github/workflows/build-bootc.yml`). The flashing-station tooling — `mirror.sh`,
+**Two repos.** This one holds the image pipeline (`microshift/`, `physically-bound-images/`,
+`.github/workflows/`). The flashing-station tooling — `mirror.sh`,
 `install-offline.sh` and the station-side flashing docs — lives in
 `black-cloudlet/jetson-installer-config`. The split is deliberate: mirroring RPMs and flashing
 QSPI are a different job from building an image, and they run on different machines. This file
@@ -105,7 +105,16 @@ Target stack on the device:
    way. The runner's `/dev/nvme0n1` scratch disk is formatted and `/var/lib/containers`,
    `/var/tmp` and the ISO output are moved onto it — ~10 GB of embedded images plus a
    multi-gigabyte ISO does not fit in the job container's writable layer.
-7. **NVIDIA BSP download stays manual** and is documented in `README.md`. Scripting it was tried;
+7. **One directory per Kubernetes variant.** `microshift/` holds a `Containerfile`, a
+   `config.toml` and a `smoke-test.sh`; `k3s/` is expected to sit beside it. CI is a reusable
+   workflow taking a `variant` input plus a thin caller per variant, so a new variant adds a
+   directory and ~12 lines of YAML and touches nothing shared. Shared build/boot tooling
+   (`physically-bound-images/`) stays at the root and the build context is the repository root
+   so any variant can `COPY` it. Images are published per variant as
+   `jetson-orin-bootc-<variant>`, so a fleet's `bootc switch` target names the distribution it
+   is actually running. Layout and the reusable-workflow split follow
+   `redhat-et/edge-ai-image-pipelines`.
+8. **NVIDIA BSP download stays manual** and is documented in `README.md`. Scripting it was tried;
    NVIDIA's version-string and URL-path (`release/` vs `releases/`) inconsistencies made it fragile.
 
 ## What is done and working
@@ -130,9 +139,9 @@ Target stack on the device:
 Both scripts are idempotent and re-runnable. They have been exercised end to end: the station
 was provisioned from the bundle and the devkit was flashed with the QSPI command above.
 
-### bootc image + installer ISO pipeline (`Containerfile`, `config.toml`, `build-bootc.yml`)
+### bootc image + installer ISO pipeline (`microshift/`, `physically-bound-images/`, `.github/workflows/`)
 
-- `Containerfile` — `FROM` the pinned JetPack-for-RHEL image, then MicroShift 4.20 from
+- `microshift/Containerfile` — `FROM` the pinned JetPack-for-RHEL image, then MicroShift 4.20 from
   `rhocp-4.20-for-rhel-9-aarch64-rpms` + `fast-datapath-for-rhel-9-aarch64-rpms`
   (`firewalld jq microshift microshift-release-info`), the mandatory firewall rules, the
   `microshift-make-rshared.service` OVN needs, and every MicroShift container image embedded
@@ -157,7 +166,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   not handle. The unit deliberately does **not** want `network-online.target`: the copy is
   local-disk only and waiting for a carrier that never comes would add
   NetworkManager-wait-online's timeout to every boot.
-- `config.toml` — bib config with a **custom kickstart** (bib then adds only `ostreecontainer`;
+- `microshift/config.toml` — bib config with a **custom kickstart** (bib then adds only `ostreecontainer`;
   `[customizations.user]`/`filesystem` cannot be combined with a custom kickstart, so
   everything lives in the kickstart): `text --non-interactive`, `timezone Asia/Jerusalem --utc`,
   static `192.168.1.10/24` gw `192.168.1.1` on link with `--hostname=Jetson`, `ignoredisk
@@ -170,13 +179,12 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   The static address and hostname are baked into the ISO: two devices imaged from the same ISO
   collide on one segment. `--nameserver` is deliberately absent — the network is air-gapped and
   there is no resolver to point at.
-- `.github/workflows/build-bootc.yml` — job `image` on `ubuntu-24.04-arm`: restore entitlement
-  (now needed here too, for the MicroShift RPMs), write the pull secret, build with the
-  entitlement bind-mounted and the pull secret as a build secret, smoke test (`bootc --version`,
-  `/etc/nv_tegra_release`, `rpm -q` kmod + toolkit-base, `nvgpu.ko` present, `rpm -q microshift`,
-  `systemctl is-enabled microshift`, and every image in `image-list.txt` present on disk), push
-  `ghcr.io/<owner>/jetson-orin-bootc:<YYYYMMDD-sha8>` + `latest`. Job `iso`:
-  restore entitlement certs from a secret, `sed` the two placeholders, run
+- `.github/workflows/build-bootc-image.yml` — **reusable** (`workflow_call`, input `variant`).
+  Job `image`: register, move container storage onto the runner's scratch disk, write the pull
+  secret, build `<variant>/Containerfile` with the repo root as context, run
+  `<variant>/smoke-test.sh` inside the result, push
+  `ghcr.io/<owner>/jetson-orin-bootc-<variant>:<YYYYMMDD-sha8>` + `latest`. Job `iso`:
+  register, `sed` the two placeholders into `<variant>/config.toml`, run
   `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso` with
   `/etc/pki/entitlement` and `/etc/rhsm` bind-mounted, upload `*.iso` + `SHA256SUMS`.
 
@@ -199,7 +207,7 @@ needs NVMe/USB/NIC, and the deployed image brings its own kernel.
 
 ## Next step: validate on hardware, then the NVIDIA device plugin
 
-1. Run `build-bootc.yml`, `dd` the ISO, boot the devkit from USB with QSPI flashed from R36.5.x.
+1. Run `build-microshift.yml`, `dd` the ISO, boot the devkit from USB with QSPI flashed from R36.5.x.
    Confirm `bootc status`, `lsmod | grep nvgpu`, `nvidia-ctk cdi list` → `nvidia.com/gpu=all`,
    and a GPU container (`podman run --device nvidia.com/gpu=all …`).
 2. Same boot, confirm MicroShift: `systemctl status microshift`, `oc get pods -A` all running

@@ -1,0 +1,20 @@
+# MicroShift variant. Thin caller; everything lives in build-bootc-image.yml.
+name: microshift image + installer ISO
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - microshift/**
+      - physically-bound-images/**
+      - .github/workflows/build-microshift.yml
+      - .github/workflows/build-bootc-image.yml
+  workflow_dispatch:
+
+jobs:
+  microshift:
+    uses: ./.github/workflows/build-bootc-image.yml
+    with:
+      variant: microshift
+    secrets: inherit
+    permissions: { contents: read, packages: write }

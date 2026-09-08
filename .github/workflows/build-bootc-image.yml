@@ -1,40 +1,50 @@
-name: bootc image + installer ISO
+# Reusable: build one image variant and turn it into an installer ISO.
+#
+# A variant is a directory holding Containerfile, config.toml and
+# smoke-test.sh. The build context is the repository root, so a variant's
+# Containerfile can COPY shared tooling such as physically-bound-images/.
+# Callers are thin: .github/workflows/build-<variant>.yml.
+#
+# Shape borrowed from redhat-et/edge-ai-image-pipelines (Apache-2.0), which
+# builds Tegra bootc images the same way: an Ubuntu runner for native aarch64
+# with every step inside a UBI container, so podman/buildah/skopeo come from
+# RHEL and subscription-manager supplies entitlement. GitHub offers no
+# RHEL-hosted runner.
+name: build bootc image variant
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - Containerfile
-      - config.toml
-      - physically-bound-images/**
-      - .github/workflows/build-bootc.yml
-  workflow_dispatch:
-
-env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/jetson-orin-bootc
-
-# Both jobs run on an Ubuntu runner but do all their work inside a UBI
-# container: podman/buildah/skopeo come from RHEL rather than Ubuntu's archive,
-# and `subscription-manager register` inside the container gives entitlement for
-# the MicroShift RPMs and bib's Anaconda depsolve. Pattern from
-# redhat-et/edge-ai-image-pipelines (Apache-2.0).
-#
-# --device /dev/nvme0n1 is the runner's scratch disk. Embedding ~10 GB of
-# container images and then building an ISO does not fit in the container's
-# default writable layer, so /var/lib/containers and /var/tmp are moved onto it.
+  workflow_call:
+    inputs:
+      variant:
+        description: directory holding Containerfile, config.toml and smoke-test.sh
+        type: string
+        required: true
+      runs-on:
+        description: runner label; must be native aarch64
+        type: string
+        default: ubuntu-24.04-arm
+    outputs:
+      tag:
+        value: ${{ jobs.image.outputs.tag }}
+      image:
+        value: ${{ jobs.image.outputs.image }}
 
 jobs:
   image:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ inputs.runs-on }}
     permissions: { contents: read, packages: write }
     container:
+      # --device is the runner's scratch disk: embedded container images do not
+      # fit in the job container's writable layer.
       image: registry.access.redhat.com/ubi9/ubi
       options: --privileged --device /dev/nvme0n1
     env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/jetson-orin-bootc-${{ inputs.variant }}
       # Use this container's own registration, not the (unsubscribed) host's.
       SMDEV_CONTAINER_OFF: 1
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
+      image: ${{ steps.meta.outputs.image }}
     steps:
       - uses: actions/checkout@v4
 
@@ -66,13 +76,15 @@ jobs:
 
       - name: Compute tag
         id: meta
-        run: echo "tag=$(date -u +%Y%m%d)-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "tag=$(date -u +%Y%m%d)-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
       - name: Login GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      # Pulls MicroShift's and the device plugin's images at build time; never
-      # written into the OS image.
+      # Pulls the variant's container images at build time; never written into
+      # the OS image.
       - name: Write pull secret
         env:
           PULL_SECRET: ${{ secrets.OPENSHIFT_PULL_SECRET }}
@@ -86,30 +98,11 @@ jobs:
         run: |
           podman build \
             --secret id=pullsecret,src=/tmp/pull-secret.json \
-            -t "$IMAGE:${{ steps.meta.outputs.tag }}" -t "$IMAGE:latest" -f Containerfile .
+            -t "$IMAGE:${{ steps.meta.outputs.tag }}" -t "$IMAGE:latest" \
+            -f "${{ inputs.variant }}/Containerfile" .
 
       - name: Smoke test
-        run: |
-          podman run --rm "$IMAGE:${{ steps.meta.outputs.tag }}" bash -c '
-            set -eu
-            bootc --version
-            cat /etc/nv_tegra_release
-            rpm -q nvidia-jetpack-for-rhel-9.8-kmod nvidia-container-toolkit-base
-            ls /usr/lib/modules/*/extra/drivers/gpu/nvgpu/nvgpu.ko
-            rpm -q microshift microshift-release-info
-            test -L /etc/systemd/system/multi-user.target.wants/microshift.service
-            test -L /etc/systemd/system/multi-user.target.wants/microshift-make-rshared.service
-            test -L /etc/systemd/system/multi-user.target.wants/copy-embedded-images.service
-            test -s /etc/microshift/manifests/nvidia-device-plugin.yml
-            test -s /etc/microshift/manifests/kustomization.yaml
-            test -f /etc/crio/crio.conf.d/99-nvidia.conf
-            test -s /usr/lib/containers-image-cache/mapping.txt
-            echo "embedded images: $(wc -l < /usr/lib/containers-image-cache/mapping.txt)"
-            while IFS=, read -r img sha; do
-              test -f "/usr/lib/containers-image-cache/${sha}/manifest.json" \
-                || { echo "missing embedded image: ${img}"; exit 1; }
-            done < /usr/lib/containers-image-cache/mapping.txt
-            grep -q nvidia /usr/lib/containers-image-cache/mapping.txt'
+        run: podman run --rm -i "$IMAGE:${{ steps.meta.outputs.tag }}" bash -s < "${{ inputs.variant }}/smoke-test.sh"
 
       - name: Push
         run: podman push "$IMAGE:${{ steps.meta.outputs.tag }}" && podman push "$IMAGE:latest"
@@ -118,17 +111,19 @@ jobs:
         if: always()
         run: subscription-manager unregister || true
 
-  # Turn the pushed image into an unattended Anaconda installer ISO. bib runs
-  # nested inside the UBI builder, so it needs --privileged and, unlike on an
-  # Ubuntu host, the SELinux opt-out.
+  # bib runs nested inside the UBI builder, so unlike on an Ubuntu host it needs
+  # the SELinux opt-out as well as --privileged.
   iso:
     needs: image
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ inputs.runs-on }}
     permissions: { contents: read, packages: read }
     container:
       image: registry.access.redhat.com/ubi9/ubi
       options: --privileged --device /dev/nvme0n1
     env:
+      IMAGE: ${{ needs.image.outputs.image }}
+      TAG: ${{ needs.image.outputs.tag }}
+      ISO_NAME: jetson-orin-bootc-${{ inputs.variant }}-${{ needs.image.outputs.tag }}.iso
       SMDEV_CONTAINER_OFF: 1
     steps:
       - uses: actions/checkout@v4
@@ -168,26 +163,26 @@ jobs:
       - name: Render config.toml
         run: |
           sed -e 's|@EDGE_SSH_PUBKEY@|${{ secrets.EDGE_SSH_PUBKEY }}|' \
-              -e 's|@EDGE_PASSWORD_HASH@|${{ secrets.EDGE_PASSWORD_HASH }}|' config.toml > /tmp/config.toml
+              -e 's|@EDGE_PASSWORD_HASH@|${{ secrets.EDGE_PASSWORD_HASH }}|' \
+              "${{ inputs.variant }}/config.toml" > /tmp/config.toml
           ! grep -q '@EDGE_' /tmp/config.toml
 
       - name: Build ISO
         run: |
-          podman pull "$IMAGE:${{ needs.image.outputs.tag }}"
+          podman pull "$IMAGE:$TAG"
           podman run --rm --privileged --pull=newer \
             --security-opt label=type:unconfined_t \
             -v /tmp/config.toml:/config.toml:ro \
             -v ./output:/output \
             -v /var/lib/containers/storage:/var/lib/containers/storage \
             registry.redhat.io/rhel9/bootc-image-builder:latest \
-            --type anaconda-iso --config /config.toml \
-            "$IMAGE:${{ needs.image.outputs.tag }}"
-          mv output/bootiso/install.iso "output/jetson-orin-bootc-${{ needs.image.outputs.tag }}.iso"
+            --type anaconda-iso --config /config.toml "$IMAGE:$TAG"
+          mv output/bootiso/install.iso "output/$ISO_NAME"
           (cd output && sha256sum ./*.iso > SHA256SUMS)
 
       - uses: actions/upload-artifact@v4
         with:
-          name: jetson-orin-bootc-iso-${{ needs.image.outputs.tag }}
+          name: jetson-orin-bootc-${{ inputs.variant }}-iso-${{ needs.image.outputs.tag }}
           path: |
             output/*.iso
             output/SHA256SUMS
