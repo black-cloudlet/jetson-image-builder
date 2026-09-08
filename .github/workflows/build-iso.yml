@@ -78,15 +78,10 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
           printf '%s' "$RH_REGISTRY_PASSWORD" | podman login registry.redhat.io -u "$RH_REGISTRY_USER" --password-stdin
 
-      # Validate before bib runs. An empty or plaintext JETSON_PASSWORD_HASH still
-      # renders a complete kickstart, so the only symptom is a finished ISO whose
-      # `jetson` account cannot be logged into -- an hour of build for nothing, and
-      # `--password=` with `--iscrypted` leaves the account with no password at all.
-      #
-      # Secrets go through env: rather than being interpolated into the script, and
-      # substitution is bash, not sed: a quote would have broken out of sed's script,
-      # a newline would have ended it, and `&` expands to the whole match in both
-      # sed's and (bash >= 5.2) bash's replacement text -- silently mangling a key.
+      # An empty or plaintext hash still renders a valid kickstart, so a bad secret
+      # would surface only as a finished ISO nobody can log into. Fail here instead.
+      # env: + bash substitution rather than sed: a quote, a newline or an `&` in a
+      # value would break the command or silently mangle what lands in the file.
       - name: Render config.toml
         env:
           JETSON_SSH_PUBKEY: ${{ secrets.JETSON_SSH_PUBKEY }}
@@ -108,8 +103,7 @@ jobs:
             *) echo "::error::JETSON_SSH_PUBKEY is not an OpenSSH public key; it must be the contents of the .pub file, not a path to it"; exit 1;;
           esac
 
-          # bash 5.2 expands & in the replacement to the matched text; 5.1 has no
-          # such shopt to unset, which is the same thing as it being off.
+          # bash 5.2 expands & in the replacement; 5.1 has no such shopt to unset.
           shopt -u patsub_replacement 2>/dev/null || true
           config=$(cat "$CONFIG")
           config=${config//@JETSON_SSH_PUBKEY@/$JETSON_SSH_PUBKEY}
