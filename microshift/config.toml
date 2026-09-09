@@ -13,22 +13,25 @@ timezone Asia/Jerusalem --utc
 # Two of them on one segment will collide — re-image or fix up per device before adding a second.
 network --bootproto=static --ip=192.168.1.10 --netmask=255.255.255.0 --gateway=192.168.1.1 --device=link --onboot=on --activate --hostname=Jetson
 
-# Install to the NVMe only; never touch the USB key the installer booted from or the eMMC.
-ignoredisk --only-use=nvme0n1
+# Install to the devkit's on-board eMMC only; never touch the USB key the
+# installer booted from, nor any NVMe that happens to be fitted. An inserted SD
+# card enumerates as mmcblk1, but pull it before imaging rather than trusting
+# the numbering.
+ignoredisk --only-use=mmcblk0
 zerombr
 clearpart --all --initlabel --disklabel=gpt
 reqpart --add-boot
 part pv.01 --size=1 --grow
 volgroup rhel pv.01
-# Sized for the 64 GB target (~59.6 GiB): the ESP and /boot take ~1.6 GiB
-# outside the VG, leaving ~58 GiB in it. A 40 GiB root holds the ~10 GB image
-# cache in /usr, the copy replayed into /var/lib/containers, and a second
-# deployment staged by `bootc upgrade`. The remaining ~18 GiB stays
-# unallocated on purpose — MicroShift's LVMS carves PVCs out of it
-# (PostgreSQL, RabbitMQ, the model store), and a full VG means no dynamic
-# provisioner at all. On a larger device raise this size; the free remainder
-# grows with the disk on its own. xfs grows but never shrinks, so erring small
-# here is the recoverable direction.
+# Sized for the devkit's 64 GB eMMC, whose user area is ~58 GiB: the ESP and
+# /boot take ~1.6 GiB outside the VG, leaving ~56.5 GiB in it. A 40 GiB root
+# holds the ~10 GB image cache in /usr, the copy replayed into
+# /var/lib/containers, and a second deployment staged by `bootc upgrade`. The
+# remaining ~16.5 GiB stays unallocated on purpose — MicroShift's LVMS carves
+# PVCs out of it (PostgreSQL, RabbitMQ, the model store), and a full VG means
+# no dynamic provisioner at all. If this ever moves to an NVMe, raise the root
+# size; the free remainder grows with the device on its own. xfs grows but
+# never shrinks, so erring small here is the recoverable direction.
 logvol / --vgname=rhel --name=root --size=40960 --fstype=xfs
 # No swap, deliberately. kubelet refuses to start with swap enabled
 # (failSwapOn defaults to true), and `--recommended` sizes swap from RAM —
