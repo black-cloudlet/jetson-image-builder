@@ -7,11 +7,13 @@ FROM ${BASE_IMAGE}
 # UBI container, or on a subscribed RHEL host where podman injects entitlement.
 # No `dnf upgrade` — it could pull a kernel past the one the Tegra kmod is built
 # against. --enablerepo avoids depending on dnf-plugins-core in the base.
+# openshift-clients is `oc`: the microshift RPM ships no client at all, and
+# without it the node cannot inspect its own cluster.
 ARG USHIFT_VER=4.20
 RUN dnf install -y \
         --enablerepo="rhocp-${USHIFT_VER}-for-rhel-9-$(uname -m)-rpms" \
         --enablerepo="fast-datapath-for-rhel-9-$(uname -m)-rpms" \
-        firewalld jq microshift microshift-release-info && \
+        firewalld jq microshift microshift-release-info openshift-clients && \
     systemctl enable microshift && \
     dnf clean all
 
