@@ -113,9 +113,15 @@ Target stack on the device:
    `subscription-manager register` inside the container supplies entitlement. Images are pushed
    to GHCR, then mirrored into the air-gapped registry by hand. Pattern taken from
    `redhat-et/edge-ai-image-pipelines` (Apache-2.0), which builds Tegra bootc images the same
-   way. The runner's `/dev/nvme0n1` scratch disk is formatted and `/var/lib/containers`,
-   `/var/tmp` and the ISO output are moved onto it — ~10 GB of embedded images plus a
-   multi-gigabyte ISO does not fit in the job container's writable layer.
+   way. ~10 GB of embedded images plus a multi-gigabyte ISO does not fit in the job
+   container's writable layer, so the runner's ephemeral disk (`/mnt` on the host) is bind-mounted
+   into the job container as `/scratch` and `/var/lib/containers`, `/var/tmp` and the ISO output
+   are bound onto it. Each job compares free space on `/` (the writable layer, on the runner's OS
+   disk) with `/scratch` and keeps the larger, rather than assuming either: `ubuntu-24.04-arm` has
+   no `/dev/nvme0n1`, and the `mkfs.xfs /dev/nvme0n1` inherited from the reference repo failed
+   every run. `--device /dev/nvme0n1` in `container.options` did not catch it earlier because
+   under `--privileged` Docker replaces the device list with the host's whole `/dev` and silently
+   ignores a path that does not exist.
 7. **Three layers, one directory per Kubernetes variant.** `base/` republishes the pinned
    vendor image under our own name and adds nothing — it exists so the pin lives in one file
    and so there is a stable internal name to mirror into the air-gapped registry. `apps/`
@@ -128,9 +134,9 @@ Target stack on the device:
    `jetson-orin-bootc-<name>` and the next builds on its **digest**, not its tag. CI is two
    reusable workflows — `build-image.yml` (one layer) and `build-iso.yml` — plus a caller per
    variant chaining base → variant → ISO. Shared tooling (`physically-bound-images/`) stays at
-   the root and the build context is the repository root so any layer can `COPY` it. A layer
-   layer registers with subscription-manager, including the two that install no RPMs: `xfsprogs`
-   for the runner's scratch disk lives in the RHEL repos, not UBI's. Layout and the
+   the root and the build context is the repository root so any layer can `COPY` it. Every
+   layer registers with subscription-manager, including the two that install no RPMs: one code
+   path for every layer beats a per-layer entitlement flag. Layout and the
    reusable-workflow split follow
    `redhat-et/edge-ai-image-pipelines`, whose `Containerfile.podman` is the same idea as our
    `base/`.
@@ -210,7 +216,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   collide on one segment. `--nameserver` is deliberately absent — the network is air-gapped and
   there is no resolver to point at.
 - `.github/workflows/build-image.yml` — **reusable**: register, move container storage onto the
-  runner's scratch disk, write the
+  runner's ephemeral disk when that is the roomier one, write the
   pull secret, build the given Containerfile with the repo root as context, run the given
   smoke-test inside the result, push `ghcr.io/<owner>/jetson-orin-bootc-<name>:<YYYYMMDD-sha8>`
   + `latest`, and output the ref pinned by digest (`podman push --digestfile`).
