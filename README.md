@@ -91,9 +91,10 @@ secret — kept separate so `RH_REGISTRY_*` can hold a narrow Registry Service A
 
 ## Install
 
-The kickstart in `microshift/config.toml` is fully unattended: it wipes `nvme0n1` only (the USB
-key and eMMC are ignored), creates `edge` in `wheel`, locks root, and reboots ejecting the media.
-Booting it on a device with data on the NVMe is destructive.
+The kickstart in `microshift/config.toml` is fully unattended: it wipes the on-board eMMC
+`mmcblk0` only (the USB key and any fitted NVMe are ignored), creates `edge` in `wheel`, locks
+root, and reboots ejecting the media. Booting it on a devkit whose eMMC still holds the factory
+L4T install is destructive — that is the point, but there is no confirmation prompt.
 
 The network is **static**: the device comes up as `Jetson` on `192.168.1.10/24` via
 `192.168.1.1`. Every device imaged from a given ISO gets that same address and hostname, so a
@@ -102,7 +103,8 @@ after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UT
 
 1. Flash QSPI on the station from a **R36.5.x** BSP (same L4T line as the image):
    `sudo ./flash.sh p3737-0000-p3701-0000-qspi external`
-2. `dd` the ISO to a USB key, plug it in with the NVMe fitted, ESC at the NVIDIA logo, pick USB.
+2. `dd` the ISO to a USB key, plug it in, ESC at the NVIDIA logo, pick USB. Pull any SD card
+   first, so the eMMC cannot enumerate as anything but `mmcblk0`.
 3. Wait for the reboot, then over serial (`ttyTCU0`) or `ssh edge@192.168.1.10`:
    ```
    bootc status
@@ -186,12 +188,30 @@ already mounted the step warns and continues rather than reformatting something 
 
 ## Storage layout
 
-The kickstart puts `/boot` and the ESP outside LVM, then gives the rest of the NVMe to one volume
-group named `rhel`: a 60 GiB xfs root, swap, and **the remainder left free on purpose**.
-MicroShift's LVMS provisioner carves PVCs out of that free space, so PostgreSQL, RabbitMQ and the
-model store have somewhere to live. Filling the VG would leave the cluster with no dynamic
-provisioner. This assumes an NVMe of roughly 80 GiB or more; adjust `logvol / --size` if the root
-filesystem needs to be bigger.
+The install target is the devkit's **on-board 64 GB eMMC** (`mmcblk0`), not an NVMe. The kickstart
+puts `/boot` and the ESP outside LVM, then gives the rest of the device to one volume group named
+`rhel`: a 40 GiB xfs root, no swap, and **the remainder left free on purpose**. MicroShift's LVMS
+provisioner carves PVCs out of that free space, so PostgreSQL, RabbitMQ and the model store have
+somewhere to live. Filling the VG would leave the cluster with no dynamic provisioner.
+
+The budget: ~58 GiB of eMMC user area, ~1.6 GiB of it spent on the ESP and `/boot`, ~56.5 GiB in
+the VG, 40 GiB root, **~16.5 GiB free for PVCs**. The root figure is set by what has to fit in it —
+~10 GB of embedded images in `/usr`, the copy `copy-embedded-images.service` replays into
+`/var/lib/containers`, and a second deployment staged by `bootc upgrade`. xfs grows but never
+shrinks, so an undersized root is the recoverable mistake. Confirm the exact device size with
+`lsblk -bdno SIZE /dev/mmcblk0` before trusting the free-space figure.
+
+Two consequences of the eMMC target worth knowing. It contradicts the "boots from external storage"
+half of the QSPI-only flash decision, so the UEFI boot order has to list the eMMC — check it in the
+UEFI menu on first boot. And eMMC is slower and far less write-durable than NVMe, which etcd's
+fsync pattern and write-heavy PVCs (PostgreSQL, RabbitMQ) will feel; fitting an NVMe to the M.2
+slot and re-imaging with `--only-use=nvme0n1` and a larger root is the upgrade path.
+
+There is no swap on purpose. kubelet's `failSwapOn` defaults to true, so an active swap device is a
+plausible reason for `microshift.service` never to come up; and `logvol swap --recommended` sizes
+swap from RAM rather than from the disk — half of it in the 8–64 GiB band, so ~15 GiB on the 32 GB
+SOM and ~31 GiB on a 64 GB one — taken out of the same extents LVMS provisions from. On this device
+that alone overran the disk.
 
 ## Local build (subscribed RHEL 9 aarch64 host)
 

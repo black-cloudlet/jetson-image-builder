@@ -49,7 +49,7 @@ Target stack on the device:
                                           │ QSPI/UEFI only                    │ ISO / qcow2
                                           ▼                                   ▼
                                ┌──────────────────────────────────────────────────────────┐
-                               │ Jetson AGX Orin: first boot from USB (ISO/qcow2),        │
+                               │ Jetson AGX Orin: install from USB (ISO) onto the eMMC,   │
                                │ later `bootc switch/upgrade` from the air-gapped registry │
                                └──────────────────────────────────────────────────────────┘
 ```
@@ -63,13 +63,24 @@ Target stack on the device:
 2. **RHEL 9.8 + JetPack 6.x (L4T r36.4) is the only GA combination.** RHEL 10 is not viable:
    no NVIDIA RHEL 10 L4T repo, kmod built against 5.14 will not load on 6.12. Do not propose
    RHEL 10 as a base.
-3. **QSPI-only flash.** The Jetson boots RHEL bootc from external storage, so the Ubuntu rootfs
-   in the BSP is discarded entirely. The working command is:
+3. **QSPI-only flash, then RHEL bootc on the on-board eMMC.** The QSPI carries UEFI and boot
+   firmware only; RHEL is installed to `mmcblk0`, the devkit's 64 GB eMMC, by the anaconda ISO.
+   Either way the Ubuntu rootfs in the BSP is discarded entirely — nothing NVIDIA ships lands on
+   the device's storage. The working command is:
    ```
    sudo ./flash.sh p3737-0000-p3701-0000-qspi external
    ```
    NOT `jetson-agx-orin-devkit external` — that target builds a recovery ramdisk and fails
-   without a populated `rootfs/`.
+   without a populated `rootfs/`. The trailing `external` is kept because that is the invocation
+   confirmed on our hardware, and a `-qspi` target writes only the QSPI regardless; what actually
+   selects the boot device is the UEFI boot order, so confirm the eMMC is in it (ESC at the NVIDIA
+   logo → Boot Maintenance Manager → Boot Options). If UEFI refuses to boot the eMMC, re-flashing
+   the QSPI with `internal` is the thing to try before anything else.
+   eMMC was not the original plan — external NVMe was — and it is a real constraint, not just a
+   different device name: ~58 GiB of user area against an NVMe's arbitrary size, and eMMC write
+   endurance and latency under etcd's fsync pattern and write-heavy PVCs. Fitting an M.2 NVMe and
+   re-imaging with `ignoredisk --only-use=nvme0n1` plus a larger root is the upgrade path, and is
+   worth doing before real application images and a model store land on the node.
 4. **Base image is Red Hat's JetPack-for-RHEL bootc image**, not a hand-rolled
    `rhel9/rhel-bootc:9.8` + NVIDIA RPMs:
    ```
@@ -189,10 +200,10 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   `[customizations.user]`/`filesystem` cannot be combined with a custom kickstart, so
   everything lives in the kickstart): `text --non-interactive`, `timezone Asia/Jerusalem --utc`,
   static `192.168.1.10/24` gw `192.168.1.1` on link with `--hostname=Jetson`, `ignoredisk
-  --only-use=nvme0n1`, `clearpart --all` + `reqpart --add-boot` + one VG `rhel` on the rest of
-  the NVMe holding a 60 GiB xfs root and swap, **with the remaining extents left free for
-  MicroShift's LVMS provisioner** (fill the VG and the cluster has no dynamic PV source, so
-  PostgreSQL/RabbitMQ/the model store have nowhere to go; assumes an NVMe ≳80 GiB), root
+  --only-use=mmcblk0`, `clearpart --all` + `reqpart --add-boot` + one VG `rhel` on the rest of
+  the eMMC holding a 40 GiB xfs root and **no swap**, **with the remaining ~16.5 GiB of extents
+  left free for MicroShift's LVMS provisioner** (fill the VG and the cluster has no dynamic PV
+  source, so PostgreSQL/RabbitMQ/the model store have nowhere to go), root
   locked, user `edge` in `wheel` from `@EDGE_SSH_PUBKEY@` /
   `@EDGE_PASSWORD_HASH@` placeholders, `reboot --eject`. ISO label `JETSON_ORIN_BOOTC`.
   The static address and hostname are baked into the ISO: two devices imaged from the same ISO
@@ -227,8 +238,12 @@ A self-hosted registered RHEL 9 aarch64 runner would remove the registration ste
 Notes on bib: upstream `bootc-image-builder` was merged into `osbuild/image-builder`, but
 `registry.redhat.io/rhel9/bootc-image-builder` remains the supported path for RHEL content and
 is what the workflow uses. Output lands at `output/bootiso/install.iso`. `anaconda-iso` boots
-the stock RHEL kernel (no Tegra modules) for the installer — that is fine, the installer only
-needs NVMe/USB/NIC, and the deployed image brings its own kernel.
+the stock RHEL kernel (no Tegra modules) for the installer, and the deployed image brings its own
+kernel. That was safe while the target was NVMe, which needs only generic PCIe plus `nvme`. The
+eMMC does not: `mmcblk0` appears only if that kernel carries the Tegra-specific `sdhci-tegra`
+driver. If the installer shows no `mmcblk0`, this is the first thing to check (`lsblk`,
+`modprobe sdhci-tegra` on the installer console, Ctrl-Alt-F2) — not the kickstart. Unverified on
+hardware as of this writing.
 
 ## Next step: validate on hardware, then the NVIDIA device plugin
 

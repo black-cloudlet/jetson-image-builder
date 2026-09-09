@@ -1,7 +1,4 @@
-# bootc-image-builder config for --type anaconda-iso.
-# With a custom kickstart, bib adds only the `ostreecontainer` line; everything else is ours.
-# @EDGE_SSH_PUBKEY@ and @EDGE_PASSWORD_HASH@ are substituted by the workflow (or by hand:
-#   sed -e "s|@EDGE_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" -e "s|@EDGE_PASSWORD_HASH@|$(openssl passwd -6)|" config.toml > /tmp/config.toml).
+# bib config for --type anaconda-iso; @EDGE_SSH_PUBKEY@ and @EDGE_PASSWORD_HASH@ are sed'd in by the workflow.
 [customizations.installer.kickstart]
 contents = """
 text --non-interactive
@@ -9,23 +6,17 @@ lang en_US.UTF-8
 keyboard us
 timezone Asia/Jerusalem --utc
 
-# Static: every device imaged from this ISO comes up on 192.168.1.10 as `Jetson`.
-# Two of them on one segment will collide — re-image or fix up per device before adding a second.
+# Static: two devices imaged from one ISO collide on a segment.
 network --bootproto=static --ip=192.168.1.10 --netmask=255.255.255.0 --gateway=192.168.1.1 --device=link --onboot=on --activate --hostname=Jetson
 
-# Install to the NVMe only; never touch the USB key the installer booted from or the eMMC.
-ignoredisk --only-use=nvme0n1
+# On-board eMMC only; 40 GiB root, no swap, the rest of the VG left free for MicroShift's LVMS.
+ignoredisk --only-use=mmcblk0
 zerombr
 clearpart --all --initlabel --disklabel=gpt
 reqpart --add-boot
-part pv.01 --grow
+part pv.01 --size=1 --grow
 volgroup rhel pv.01
-# 60 GiB root; swap sized by anaconda. Everything left in the VG stays free on
-# purpose — MicroShift's LVMS carves PVCs out of it (PostgreSQL, RabbitMQ, the
-# model store). A full disk means no dynamic provisioner. Needs an NVMe of
-# roughly 80 GiB or more.
-logvol / --vgname=rhel --name=root --size=61440 --fstype=xfs
-logvol swap --vgname=rhel --name=swap --recommended
+logvol / --vgname=rhel --name=root --size=40960 --fstype=xfs
 
 rootpw --lock
 user --name=edge --groups=wheel --iscrypted --password=@EDGE_PASSWORD_HASH@
