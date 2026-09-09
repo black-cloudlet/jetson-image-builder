@@ -1,0 +1,33 @@
+# bib config for --type anaconda-iso; @JETSON_SSH_PUBKEY@ and @JETSON_PASSWORD_HASH@ are substituted by the workflow.
+[customizations.installer.kickstart]
+contents = """
+text --non-interactive
+lang en_US.UTF-8
+keyboard us
+timezone Asia/Jerusalem --utc
+
+# Static: two devices imaged from one ISO collide on a segment.
+network --bootproto=static --ip=192.168.1.10 --netmask=255.255.255.0 --gateway=192.168.1.1 --device=link --onboot=on --activate --hostname=Jetson
+
+# On-board eMMC only; no swap. Root takes the whole VG rather than leaving free extents
+# as the microshift variant does: k3s provisions PVs from local-path on the root
+# filesystem, so free extents would be space the cluster cannot reach.
+ignoredisk --only-use=mmcblk0
+zerombr
+clearpart --all --initlabel --disklabel=gpt
+reqpart --add-boot
+part pv.01 --size=1 --grow
+volgroup rhel pv.01
+logvol / --vgname=rhel --name=root --size=40960 --grow --fstype=xfs
+
+rootpw --lock
+user --name=jetson --groups=wheel --iscrypted --password=@JETSON_PASSWORD_HASH@
+sshkey --username=jetson "@JETSON_SSH_PUBKEY@"
+
+reboot --eject
+"""
+
+[customizations.iso]
+# Distinct from the microshift ISO's label: anaconda finds its stage2 by label,
+# so two variants sharing one would pick whichever stick enumerated first.
+volume_id = "JETSON_ORIN_K3S"
