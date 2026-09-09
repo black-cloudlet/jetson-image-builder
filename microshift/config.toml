@@ -1,7 +1,4 @@
-# bootc-image-builder config for --type anaconda-iso.
-# With a custom kickstart, bib adds only the `ostreecontainer` line; everything else is ours.
-# @EDGE_SSH_PUBKEY@ and @EDGE_PASSWORD_HASH@ are substituted by the workflow (or by hand:
-#   sed -e "s|@EDGE_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" -e "s|@EDGE_PASSWORD_HASH@|$(openssl passwd -6)|" config.toml > /tmp/config.toml).
+# bib config for --type anaconda-iso; @EDGE_SSH_PUBKEY@ and @EDGE_PASSWORD_HASH@ are sed'd in by the workflow.
 [customizations.installer.kickstart]
 contents = """
 text --non-interactive
@@ -9,34 +6,17 @@ lang en_US.UTF-8
 keyboard us
 timezone Asia/Jerusalem --utc
 
-# Static: every device imaged from this ISO comes up on 192.168.1.10 as `Jetson`.
-# Two of them on one segment will collide — re-image or fix up per device before adding a second.
+# Static: two devices imaged from one ISO collide on a segment.
 network --bootproto=static --ip=192.168.1.10 --netmask=255.255.255.0 --gateway=192.168.1.1 --device=link --onboot=on --activate --hostname=Jetson
 
-# Install to the devkit's on-board eMMC only; never touch the USB key the
-# installer booted from, nor any NVMe that happens to be fitted. An inserted SD
-# card enumerates as mmcblk1, but pull it before imaging rather than trusting
-# the numbering.
+# On-board eMMC only; 40 GiB root, no swap, the rest of the VG left free for MicroShift's LVMS.
 ignoredisk --only-use=mmcblk0
 zerombr
 clearpart --all --initlabel --disklabel=gpt
 reqpart --add-boot
 part pv.01 --size=1 --grow
 volgroup rhel pv.01
-# Sized for the devkit's 64 GB eMMC, whose user area is ~58 GiB: the ESP and
-# /boot take ~1.6 GiB outside the VG, leaving ~56.5 GiB in it. A 40 GiB root
-# holds the ~10 GB image cache in /usr, the copy replayed into
-# /var/lib/containers, and a second deployment staged by `bootc upgrade`. The
-# remaining ~16.5 GiB stays unallocated on purpose — MicroShift's LVMS carves
-# PVCs out of it (PostgreSQL, RabbitMQ, the model store), and a full VG means
-# no dynamic provisioner at all. If this ever moves to an NVMe, raise the root
-# size; the free remainder grows with the device on its own. xfs grows but
-# never shrinks, so erring small here is the recoverable direction.
 logvol / --vgname=rhel --name=root --size=40960 --fstype=xfs
-# No swap, deliberately. kubelet refuses to start with swap enabled
-# (failSwapOn defaults to true), and `--recommended` sizes swap from RAM —
-# ~15 GiB on the 32 GB SOM, ~31 GiB on a 64 GB one — taken straight out of the
-# extents LVMS needs.
 
 rootpw --lock
 user --name=edge --groups=wheel --iscrypted --password=@EDGE_PASSWORD_HASH@
