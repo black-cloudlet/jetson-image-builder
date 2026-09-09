@@ -7,6 +7,20 @@
 # GPU or the cluster — only a boot on real hardware does that.
 set -euo pipefail
 
+# A bare `test` under `set -e` exits 1 with no output, which says nothing about
+# which check failed. Name the path, and list where it should have been.
+have() {
+	flag=$1 path=$2
+	shift 2
+	test "$flag" "$path" && return 0
+	echo "missing: $path"
+	for dir in "$@"; do
+		echo "-- $dir"
+		ls -la "$dir" 2>&1 | sed 's/^/   /'
+	done
+	exit 1
+}
+
 echo "== base image =="
 bootc --version
 cat /etc/nv_tegra_release
@@ -20,7 +34,8 @@ for unit in microshift microshift-make-rshared copy-embedded-images; do
 	test -L "/etc/systemd/system/multi-user.target.wants/${unit}.service" \
 		|| { echo "not enabled: ${unit}.service"; exit 1; }
 done
-test -f /usr/lib/systemd/system/microshift.service.d/microshift-copy-images.conf
+have -f /usr/lib/systemd/system/microshift.service.d/microshift-copy-images.conf \
+	/usr/lib/systemd/system/microshift.service.d
 
 echo "== firewall =="
 ports="$(firewall-offline-cmd --zone=public --list-ports)"
@@ -33,13 +48,16 @@ for src in 10.42.0.0/16 10.43.0.0/16 169.254.169.1; do
 done
 
 echo "== nvidia device plugin =="
-test -f /etc/crio/crio.conf.d/99-nvidia.conf
-test -s /etc/microshift/manifests/nvidia-device-plugin.yml
-test -s /etc/microshift/manifests/kustomization.yaml
+# nvidia-ctk decides for itself where a crio drop-in goes, so on a miss show both
+# the config dir it was pointed at and the OCI hook dir it may have used instead.
+have -f /etc/crio/crio.conf.d/99-nvidia.conf \
+	/etc/crio /etc/crio/crio.conf.d /usr/share/containers/oci/hooks.d
+have -s /etc/microshift/manifests/nvidia-device-plugin.yml /etc/microshift/manifests
+have -s /etc/microshift/manifests/kustomization.yaml /etc/microshift/manifests
 
 echo "== embedded images =="
 mapping=/usr/lib/containers-image-cache/mapping.txt
-test -s "$mapping"
+have -s "$mapping" /usr/lib/containers-image-cache
 echo "embedded: $(wc -l < "$mapping") images"
 while IFS=, read -r img sha; do
 	test -f "/usr/lib/containers-image-cache/${sha}/manifest.json" \
