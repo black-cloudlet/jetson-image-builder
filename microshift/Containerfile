@@ -50,8 +50,12 @@ After=copy-embedded-images.service\n' \
 # CRI-O needs the NVIDIA runtime before a pod can request a GPU. MicroShift
 # applies the manifest through kustomize on first start.
 ARG NVIDIA_DEVICE_PLUGIN_VER=v0.17.1
+# .toml, not .conf: nvidia-ctk rewrites a drop-in path to a .toml extension and
+# still exits 0, so asking for .conf silently produces a file by another name.
+# CRI-O walks crio.conf.d and reads every file whatever the extension, and 99-
+# still sorts after MicroShift's own 10- and 11- drop-ins.
 RUN nvidia-ctk runtime configure --runtime=crio --set-as-default \
-        --config=/etc/crio/crio.conf.d/99-nvidia.conf
+        --config=/etc/crio/crio.conf.d/99-nvidia.toml
 
 RUN mkdir -p /etc/microshift/manifests && \
     curl -fsSL -o /etc/microshift/manifests/nvidia-device-plugin.yml \

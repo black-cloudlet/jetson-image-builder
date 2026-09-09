@@ -48,10 +48,9 @@ for src in 10.42.0.0/16 10.43.0.0/16 169.254.169.1; do
 done
 
 echo "== nvidia device plugin =="
-# nvidia-ctk decides for itself where a crio drop-in goes, so on a miss show both
-# the config dir it was pointed at and the OCI hook dir it may have used instead.
-have -f /etc/crio/crio.conf.d/99-nvidia.conf \
-	/etc/crio /etc/crio/crio.conf.d /usr/share/containers/oci/hooks.d
+# .toml is the name nvidia-ctk actually writes for a drop-in; on a miss, list the
+# directory so a future rename says so instead of failing blind.
+have -s /etc/crio/crio.conf.d/99-nvidia.toml /etc/crio/crio.conf.d
 have -s /etc/microshift/manifests/nvidia-device-plugin.yml /etc/microshift/manifests
 have -s /etc/microshift/manifests/kustomization.yaml /etc/microshift/manifests
 
