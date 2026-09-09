@@ -14,7 +14,8 @@ rpm -q nvidia-jetpack-for-rhel-9.8-kmod nvidia-container-toolkit-base
 ls /usr/lib/modules/*/extra/drivers/gpu/nvgpu/nvgpu.ko
 
 echo "== microshift =="
-rpm -q microshift microshift-release-info
+rpm -q microshift microshift-release-info openshift-clients
+oc version --client
 for unit in microshift microshift-make-rshared copy-embedded-images; do
 	test -L "/etc/systemd/system/multi-user.target.wants/${unit}.service" \
 		|| { echo "not enabled: ${unit}.service"; exit 1; }

@@ -112,10 +112,12 @@ after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UT
    ```
 4. Then MicroShift. First boot is slow — `copy-embedded-images.service` replays every embedded
    image into containers-storage before MicroShift starts, and the cluster settles after that.
-   The firewall opens 22, 443 and 6443 on the public zone, so the API server and the router are
-   reachable from the air-gapped LAN rather than only from the node:
+   `oc` is on the node (`openshift-clients`, installed with MicroShift; the `microshift` RPM
+   ships no client). The kubeconfig is root-owned `0600`, hence `sudo -E` — plain `sudo` drops
+   `KUBECONFIG` and `oc` falls back to port 8080:
    ```
-   systemctl status microshift
+   journalctl -u copy-embedded-images     # finishes before microshift is started
+   systemctl status microshift            # wait for "MICROSHIFT READY"
    export KUBECONFIG=/var/lib/microshift/resources/kubeadmin/kubeconfig
    sudo -E oc get pods -A                 # openshift-ovn-kubernetes, -dns, -service-ca, -storage
    sudo vgs                               # VG rhel, with free extents left for LVMS
@@ -126,6 +128,43 @@ after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UT
    Pods stuck in `ImagePullBackOff` mean the embedding did not take — check
    `/usr/lib/containers-image-cache/mapping.txt` and
    `journalctl -u copy-embedded-images`.
+
+### Reaching the cluster from another machine
+
+The firewall opens 22, 443 and 6443 on the public zone, so the API server and the router are
+reachable from the air-gapped LAN and not only from the node. The credential is a client
+certificate inside the kubeconfig: there is no `oc login` and no token, and whoever holds the
+file is cluster-admin. The client itself has to cross the air gap on the USB key alongside the
+ISO, unless you drive the node's own `oc` over SSH.
+
+The default kubeconfig points at loopback, so an SSH tunnel matches the serving certificate as
+generated and needs no change on the device:
+
+```bash
+ssh -N -L 6443:127.0.0.1:6443 edge@192.168.1.10 &
+ssh edge@192.168.1.10 sudo cat /var/lib/microshift/resources/kubeadmin/kubeconfig > ~/.kube/jetson
+KUBECONFIG=~/.kube/jetson oc get pods -A
+```
+
+Talking to `192.168.1.10:6443` directly needs that address *in* the serving certificate — copying
+the loopback kubeconfig and editing its `server:` line fails with `x509: certificate is valid for
+localhost, ... not 192.168.1.10`. MicroShift writes one kubeconfig per name the certificate
+covers under `/var/lib/microshift/resources/kubeadmin/`: the flat file for loopback, then
+`<name>/kubeconfig` for the node hostname and for every `apiServer.subjectAltNames` entry.
+`sudo ls` that directory to see which names you got. To add the address, create
+`/etc/microshift/config.yaml` (the image ships only `config.yaml.default`):
+
+```yaml
+apiServer:
+  subjectAltNames:
+    - 192.168.1.10
+```
+
+then `sudo systemctl restart microshift` and copy `192.168.1.10/kubeconfig` off the node — its
+`server:` already names the address. The hostname file (`Jetson/kubeconfig`) works as well, but
+the kickstart sets no `--nameserver`, so the client needs `192.168.1.10 Jetson` in its own
+`/etc/hosts`. None of this is baked into the image: the address is per device and still an open
+question (see CLAUDE.md).
 
 ## Where the build runs
 
