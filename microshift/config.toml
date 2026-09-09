@@ -1,4 +1,4 @@
-# bib config for --type anaconda-iso; @EDGE_SSH_PUBKEY@ and @EDGE_PASSWORD_HASH@ are sed'd in by the workflow.
+# bib config for --type anaconda-iso; @JETSON_SSH_PUBKEY@ and @JETSON_PASSWORD_HASH@ are substituted by the workflow.
 [customizations.installer.kickstart]
 contents = """
 text --non-interactive
@@ -19,8 +19,8 @@ volgroup rhel pv.01
 logvol / --vgname=rhel --name=root --size=40960 --fstype=xfs
 
 rootpw --lock
-user --name=edge --groups=wheel --iscrypted --password=@EDGE_PASSWORD_HASH@
-sshkey --username=edge "@EDGE_SSH_PUBKEY@"
+user --name=jetson --groups=wheel --iscrypted --password=@JETSON_PASSWORD_HASH@
+sshkey --username=jetson "@JETSON_SSH_PUBKEY@"
 
 reboot --eject
 """

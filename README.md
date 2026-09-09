@@ -65,8 +65,13 @@ L4T line as the image built here — before a device can boot this ISO.
 | `RH_REGISTRY_USER` / `RH_REGISTRY_PASSWORD` | pull `registry.redhat.io/rhel9/bootc-image-builder` |
 | `RHSM_USERNAME` / `RHSM_PASSWORD` | Red Hat account — both jobs register with subscription-manager for the MicroShift RPMs and bib's Anaconda depsolve |
 | `OPENSHIFT_PULL_SECRET` | pull secret JSON from console.redhat.com/openshift/install/pull-secret — pulls MicroShift's and the device plugin's container images at build time |
-| `EDGE_SSH_PUBKEY` | public key for the `edge` user |
-| `EDGE_PASSWORD_HASH` | `openssl passwd -6` output for the `edge` user |
+| `JETSON_SSH_PUBKEY` | public key for the `jetson` user |
+| `JETSON_PASSWORD_HASH` | `openssl passwd -6` output for the `jetson` user — the hash, not the password |
+
+Both `JETSON_*` secrets are validated before bib runs: unset, empty, multi-line, or a plaintext
+password where a `$6$salt$hash` is expected fails the ISO job at the render step. The kickstart
+uses `--iscrypted`, so a plaintext value would install an account nobody can log into, and an
+empty one an account with no password at all — neither is visible until the ISO is booted.
 
 Entitlement comes from registering inside the build container, not from a certificate tarball —
 nothing expires in a secret, and `redhat.repo` is generated fresh by the registration. Each run
@@ -92,7 +97,7 @@ secret — kept separate so `RH_REGISTRY_*` can hold a narrow Registry Service A
 ## Install
 
 The kickstart in `microshift/config.toml` is fully unattended: it wipes the on-board eMMC
-`mmcblk0` only (the USB key and any fitted NVMe are ignored), creates `edge` in `wheel`, locks
+`mmcblk0` only (the USB key and any fitted NVMe are ignored), creates `jetson` in `wheel`, locks
 root, and reboots ejecting the media. Booting it on a devkit whose eMMC still holds the factory
 L4T install is destructive — that is the point, but there is no confirmation prompt.
 
@@ -105,7 +110,7 @@ after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UT
    `sudo ./flash.sh p3737-0000-p3701-0000-qspi external`
 2. `dd` the ISO to a USB key, plug it in, ESC at the NVIDIA logo, pick USB. Pull any SD card
    first, so the eMMC cannot enumerate as anything but `mmcblk0`.
-3. Wait for the reboot, then over serial (`ttyTCU0`) or `ssh edge@192.168.1.10`:
+3. Wait for the reboot, then over serial (`ttyTCU0`) or `ssh jetson@192.168.1.10`:
    ```
    bootc status
    cat /etc/nv_tegra_release
@@ -143,8 +148,8 @@ The default kubeconfig points at loopback, so an SSH tunnel matches the serving 
 generated and needs no change on the device:
 
 ```bash
-ssh -N -L 6443:127.0.0.1:6443 edge@192.168.1.10 &
-ssh edge@192.168.1.10 sudo cat /var/lib/microshift/resources/kubeadmin/kubeconfig > ~/.kube/jetson
+ssh -N -L 6443:127.0.0.1:6443 jetson@192.168.1.10 &
+ssh jetson@192.168.1.10 sudo cat /var/lib/microshift/resources/kubeadmin/kubeconfig > ~/.kube/jetson
 KUBECONFIG=~/.kube/jetson oc get pods -A
 ```
 
@@ -229,8 +234,8 @@ sudo podman build \
   --secret id=pullsecret,src=$HOME/pull-secret.json \
   --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-apps:dev \
   -t localhost/jetson-orin-bootc-microshift:dev -f microshift/Containerfile .
-sed -e "s|@EDGE_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
-    -e "s|@EDGE_PASSWORD_HASH@|$(openssl passwd -6)|" microshift/config.toml > /tmp/config.toml
+sed -e "s|@JETSON_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
+    -e "s|@JETSON_PASSWORD_HASH@|$(openssl passwd -6)|" microshift/config.toml > /tmp/config.toml
 mkdir output
 sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfined_t \
   -v /tmp/config.toml:/config.toml:ro -v ./output:/output \
