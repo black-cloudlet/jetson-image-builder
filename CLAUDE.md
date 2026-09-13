@@ -309,8 +309,15 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   locked, user `jetson` in `wheel` from `@JETSON_SSH_PUBKEY@` /
   `@JETSON_PASSWORD_HASH@` placeholders, `reboot --eject`. ISO label `JETSON_ORIN_BOOTC`.
   The static address and hostname are baked into the ISO: two devices imaged from the same ISO
-  collide on one segment. `--nameserver` is deliberately absent — the network is air-gapped and
-  there is no resolver to point at.
+  collide on one segment. `--nameserver=192.168.1.1` (same in `k3s/config.toml`) is written into
+  the installed system's NetworkManager profile, which is what generates `/etc/resolv.conf`;
+  a single comma-separated flag is the only accepted spelling for several servers, and a
+  repeated `--nameserver` silently keeps just the last. It must answer: an unreachable resolver
+  is worse than none, since every lookup then blocks for the 5 s glibc timeout twice per server
+  instead of failing at once — sshd's reverse lookups, `bootc switch/upgrade` against a registry
+  named by hostname, and MicroShift's CoreDNS, which forwards everything outside `cluster.local`
+  to the host's `resolv.conf`, all pay it. Kickstart's `network` has no search-domain option;
+  that would be a `%post` writing `dns-search=` into the keyfile.
 - `.github/workflows/build-image.yml` — **reusable**: register, bind container storage onto the
   runner's disk so podman gets native overlay, write the
   pull secret, build the given Containerfile with the repo root as context, run the given
