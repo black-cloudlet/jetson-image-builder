@@ -1,0 +1,9 @@
+# Half of the local model cache, which inferenceservice-config leaves off
+# ("localModel": {"enabled": false}) and whose other half — the node agent
+# next door — cannot be admitted here at all.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kserve-localmodel-controller-manager
+  namespace: kserve
+$patch: delete

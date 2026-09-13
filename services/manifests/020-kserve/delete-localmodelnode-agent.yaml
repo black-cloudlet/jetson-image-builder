@@ -1,0 +1,9 @@
+# Mounts a hostPath, which restricted-v2 does not permit at all, so the pod
+# never gets admitted. The feature it serves is off — see the controller next
+# door.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kserve-localmodelnode-agent
+  namespace: kserve
+$patch: delete

@@ -24,7 +24,7 @@ bound-images   the image-embedding machinery: the scripts and the boot-time unit
   |
 microshift   MicroShift 4.20 + NVIDIA device plugin + their images
   |            |
-  |          services   application and model-serving images + their manifests
+  |          services   cert-manager + KServe (raw) + the Triton runtime + their images
  or           |
 k3s          k3s + NVIDIA device plugin + their images
   |
@@ -51,9 +51,14 @@ build cannot simply `podman pull`: storage is overlayfs on overlayfs, and the vf
 cost image size × layer count.
 
 Each layer embeds its own: `microshift` takes MicroShift's control plane and the device plugin,
-`services` takes whatever `SERVICE_IMAGES` names. **An image a manifest names but `SERVICE_IMAGES`
-does not is a pod stuck in `ImagePullBackOff` on a disconnected node**, so `services/smoke-test.sh`
-renders the manifests and fails the build instead.
+`services` takes every image its manifests name. **An image a manifest names but nothing embedded
+is a pod stuck in `ImagePullBackOff` on a disconnected node**, so both layers derive the list by
+rendering the manifests with kustomize (`microshift/manifest-images.sh`) rather than keeping one
+by hand, and `services/smoke-test.sh` re-runs the same scan against the finished cache. A
+registry-qualified reference is part of that: CRI-O resolves a short name like
+`kserve/storage-initializer` against `unqualified-search-registries` instead of looking in the
+local store first, so the smoke test rejects one. `SERVICE_IMAGES` is still there, for an image
+no manifest names.
 
 | Path | Does |
 | ---- | ---- |
@@ -66,8 +71,9 @@ renders the manifests and fails the build instead.
 | `microshift/Containerfile` | `FROM` bound-images + MicroShift 4.20 + NVIDIA device plugin + their images |
 | `microshift/config.toml` | bootc-image-builder config — the unattended kickstart and the ISO label |
 | `microshift/smoke-test.sh` | checks run inside the finished image before it is pushed |
-| `services/Containerfile` | `FROM` microshift + `SERVICE_IMAGES` and their manifests |
-| `services/smoke-test.sh` | checks the cluster layer underneath survived, and the image cache is whole |
+| `services/Containerfile` | `FROM` microshift + cert-manager, KServe, the Triton runtime and their images |
+| `services/manifests/` | one kustomize root per component, applied by MicroShift at every start |
+| `services/smoke-test.sh` | renders every root, checks the patches still apply, the cluster layer underneath survived and the image cache is whole |
 | `k3s/Containerfile` | `FROM` bound-images + k3s + NVIDIA device plugin + their images |
 | `k3s/stage-assets.sh` | copies the baked-in images and manifests under `/var/lib/rancher` at boot |
 | `k3s/config.toml` | bootc-image-builder config — kickstart and ISO label for the k3s variant |
@@ -80,6 +86,37 @@ renders the manifests and fails the build instead.
 The bound-images job is spelled `bound_images` in the callers: a hyphen in a job id makes
 `needs.bound-images` parse as a subtraction, which resolves to nothing instead of failing. The
 image it publishes keeps the hyphen.
+
+## Services on the cluster
+
+`services/manifests/` holds one kustomize root per component under
+`/etc/microshift/manifests.d/`. MicroShift sorts them, applies each with the equivalent of
+`kubectl apply -k` at every start, and retries a root that fails every 10s for ten minutes — so
+the number prefixes are the ordering, and a CRD applied in one root but not yet established when
+the next one needs it sorts itself out.
+
+| root | what it is |
+|---|---|
+| `010-cert-manager` | upstream's static manifest, pinned by `CERT_MANAGER_VER`, unpatched. Installed only because KServe's webhooks need serving certificates — a self-signed issuer plus cainjector, no ACME, no external CA |
+| `020-kserve` | upstream `kserve.yaml`, pinned by `KSERVE_VER`, patched: `Standard` deployment mode (what KServe 0.20 calls raw), no Ingress creation, registry-qualified images, and three of upstream's four workloads deleted because MicroShift's `restricted-v2` SCC rejects them (a fixed `runAsUser`, a `hostPath`) and nothing here uses what they reconcile |
+| `030-triton-runtime` | one `ClusterServingRuntime`, `triton-igpu`: NVIDIA's Triton `-py3-igpu` build for Tegra, requesting one `nvidia.com/gpu` — one of the four time slices the device plugin publishes |
+
+Both upstream installs are `curl`'d at build time, not vendored, and patched from the roots —
+never forked. `kserve-cluster-resources.yaml` is deliberately skipped: it carries fourteen
+serving runtimes and every image they name would have to be embedded.
+
+To add a component (PostgreSQL, RabbitMQ, the model), add a directory with a
+`kustomization.yaml`; the build embeds whatever images it renders. To build without Triton,
+delete `030-triton-runtime` — its image goes with it.
+
+There is no Ingress by design: nothing on an air-gapped segment resolves a hostname, so a
+predictor is reached over its cluster-internal Service (or `oc port-forward`). An
+`InferenceService` wants `serving.kserve.io/autoscalerClass: none` unless this cluster grows a
+metrics-server, since raw mode's default autoscaler is an HPA.
+
+Triton's igpu image is the largest thing in the pipeline and the embedded cache is paid for
+twice — once in `/usr`, once when it is replayed into containers-storage under `/var` — so check
+the `du -sh` the smoke test prints against the 40 GiB root before flashing.
 
 ## Adding a variant
 
@@ -103,7 +140,7 @@ L4T line as the image built here — before a device can boot this ISO.
 |---|---|
 | `RH_REGISTRY_USER` / `RH_REGISTRY_PASSWORD` | pull `registry.redhat.io/rhel9/bootc-image-builder` |
 | `RHSM_USERNAME` / `RHSM_PASSWORD` | Red Hat account — both jobs register with subscription-manager for the MicroShift RPMs and bib's Anaconda depsolve |
-| `OPENSHIFT_PULL_SECRET` | pull secret JSON from console.redhat.com/openshift/install/pull-secret — pulls MicroShift's and the device plugin's container images at build time |
+| `OPENSHIFT_PULL_SECRET` | pull secret JSON from console.redhat.com/openshift/install/pull-secret — pulls MicroShift's and the device plugin's container images at build time. The services layer's images (`quay.io/jetstack`, `docker.io/kserve`, `nvcr.io/nvidia`) are public and pulled anonymously |
 | `JETSON_SSH_PUBKEY` | public key for the `jetson` user |
 | `JETSON_PASSWORD_HASH` | `openssl passwd -6` output for the `jetson` user — the hash, not the password |
 

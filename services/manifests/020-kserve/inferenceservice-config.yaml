@@ -1,0 +1,67 @@
+# KServe's own configuration. A strategic merge on a ConfigMap merges by key, so
+# the keys not named here keep upstream's values — but every key is one JSON
+# string, so a key that is touched has to be given whole. Upstream's text is
+# reproduced verbatim below apart from the two values called out in the
+# comments; diff it against the release when bumping KSERVE_VER.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inferenceservice-config
+  namespace: kserve
+data:
+  # Standard is what KServe 0.20 calls raw deployment: plain Deployment +
+  # Service + HPA, reconciled by the KServe controller alone. "RawDeployment"
+  # is still accepted and converted to this, but it is deprecated, so the
+  # current spelling goes in. Upstream ships "Serverless", which needs Knative
+  # Serving and an Istio ingress gateway; neither is installed, and on a
+  # single-node disconnected appliance neither is wanted.
+  deploy: |
+    {
+      "defaultDeploymentMode": "Standard"
+    }
+  # disableIngressCreation is the only change: upstream has false. In Standard
+  # mode KServe would create one Ingress per InferenceService, named
+  # <isvc>-<namespace>.example.com with class istio — a hostname nothing on an
+  # air-gapped segment can resolve (the kickstart deliberately sets no
+  # --nameserver) and a class no controller on this node claims. With creation
+  # off, the InferenceService's URL is its cluster-internal predictor Service,
+  # which is what an in-cluster caller uses anyway.
+  # The knative/istio gateway fields stay: NewIngressConfig rejects an empty
+  # ingressGateway even in Standard mode, where nothing reads it.
+  ingress: |
+    {
+        "enableGatewayApi": false,
+        "kserveIngressGateway": "kserve/kserve-ingress-gateway",
+        "ingressGateway" : "knative-serving/knative-ingress-gateway",
+        "localGateway" : "knative-serving/knative-local-gateway",
+        "localGatewayService" : "knative-local-gateway.istio-system.svc.cluster.local",
+        "ingressDomain"  : "example.com",
+        "ingressClassName" : "istio",
+        "domainTemplate": "{{ .Name }}-{{ .Namespace }}.{{ .IngressDomain }}",
+        "urlScheme": "http",
+        "disableIstioVirtualHost": false,
+        "disableIngressCreation": true,
+        "disableHTTPRouteTimeout": false
+    }
+  # Only the image changes, to the same reference fully qualified. This is the
+  # fallback path — the ClusterStorageContainer patched next door is what
+  # normally supplies the init container — but both are pod-spec images on a
+  # node with no registry, and CRI-O resolves a short name by walking
+  # unqualified-search-registries (registry.access.redhat.com first, docker.io
+  # last) instead of looking straight in the local store. The tag is repeated
+  # here and in storage-container.yaml; the smoke test fails the build if the
+  # two ever disagree with the controller's.
+  storageInitializer: |
+    {
+        "image" : "docker.io/kserve/storage-initializer:v0.20.0",
+        "memoryRequest": "100Mi",
+        "memoryLimit": "1Gi",
+        "cpuRequest": "100m",
+        "cpuLimit": "1",
+        "caBundleConfigMapName": "",
+        "caBundleVolumeMountPath": "/etc/ssl/custom-certs",
+        "enableModelcar": true,
+        "cpuModelcar": "10m",
+        "memoryModelcar": "15Mi",
+        "uidModelcar": 1010
+    }

@@ -1,0 +1,15 @@
+# kserve.yaml stopped shipping its own namespace, and every resource in it is
+# namespaced, so it has to come from here. Kustomize sorts Namespace ahead of
+# the rest and kubectl apply -k applies in that order, so one pass is enough.
+#
+# The control-plane label is upstream's, kept for the reason upstream had it:
+# the pod-mutating webhook in kserve.yaml skips namespaces that carry a
+# control-plane label, which keeps KServe's own controller out of a webhook
+# served by KServe's own controller. istio-injection is dropped — there is no
+# Istio here, which is the whole point of Standard (raw) deployment mode.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kserve
+  labels:
+    control-plane: kserve-controller-manager

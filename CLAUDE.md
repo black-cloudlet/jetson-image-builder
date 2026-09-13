@@ -136,8 +136,10 @@ Target stack on the device:
    one re-ran the whole MicroShift install.
    `microshift/` builds `FROM` bound-images and adds MicroShift, the device plugin and their
    images.
-   `services/` builds `FROM` **that** and holds the application and model-serving images —
-   KServe, the model server, PostgreSQL, RabbitMQ — and their manifests.
+   `services/` builds `FROM` **that** and holds what runs on the cluster: cert-manager,
+   KServe, the Triton serving runtime, and the application images still to come (PostgreSQL,
+   RabbitMQ, the model itself) — one kustomize root per component, and every image any of
+   those roots names embedded.
    `k3s/` sits beside `microshift/` and reuses both shared layers untouched; it is on hold and
    does not build automatically, and it has no services layer either way, because `services/` embeds for
    podman's containers-storage and writes `/etc/microshift/manifests.d`, and k3s reads neither.
@@ -195,16 +197,84 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   Published as `jetson-orin-bootc-bound-images`. No `dnf`, so neither shared layer needs
   entitlement. Its smoke test fails if an image cache exists in this layer at all: anything
   embedded here is paid for by every variant, which is the cost `services/` exists to avoid.
-- `services/Containerfile` — `FROM` the microshift layer via `ARG BASE_IMAGE`; embeds whatever
-  `SERVICE_IMAGES` names (empty today; PostgreSQL, RabbitMQ, KServe and the model server go
-  here) and is where their manifests go, one kustomize root per component under
-  `/etc/microshift/manifests.d/` — MicroShift renders every directory there, so a component is
-  added or dropped without editing the device plugin's `kustomization.yaml`, which lives a
-  layer below and cannot be reached from here. No `dnf`, so no entitlement needed.
-  The smoke test runs the microshift layer's `manifest-images.sh` over those roots and fails
-  if a manifest names an image `SERVICE_IMAGES` does not: the two are written separately and
-  nothing else ties them together, so the miss would otherwise surface as a pod in
-  `ImagePullBackOff` on a disconnected node rather than as a red build.
+- `services/Containerfile` — `FROM` the microshift layer via `ARG BASE_IMAGE`. Three kustomize
+  roots under `/etc/microshift/manifests.d/`, numbered, plus every image they name embedded.
+  No `dnf`, so no entitlement needed. The numbers are load-bearing: MicroShift's kustomizer
+  scans the default paths, **sorts** the glob matches and applies each root in turn with the
+  equivalent of `kubectl apply -k`, retrying a root that fails **every 10s for up to 10
+  minutes** before giving up on it (`pkg/kustomize/kustomize.go`, server-side apply with
+  `--force-conflicts`). That is both the ordering — cert-manager, then KServe, then the
+  runtime — and the reason a CRD applied in one root but not yet established when the next
+  asks for it resolves itself instead of needing a unit to sequence it.
+  - `010-cert-manager/` — upstream's static `cert-manager.yaml`, `curl`'d at build time
+    (`CERT_MANAGER_VER`, v1.21.2), applied unpatched. It is here only because KServe's
+    webhooks need serving certificates: three `Certificate`s issued by a **self-signed**
+    `Issuer` in the `kserve` namespace, with cainjector writing the CA into the webhook
+    configurations. Nothing reaches an ACME server or an external CA — there is no network to
+    reach one over. The static manifest is the whole install: three Deployments, no Helm and
+    no `startupapicheck` Job.
+  - `020-kserve/` — `kserve.yaml` `curl`'d (`KSERVE_VER`, v0.20.0), patched from four files.
+    `namespace.yaml` because 0.20 stopped shipping its own namespace, carrying upstream's
+    `control-plane` label, which is what keeps KServe's own pods out of a pod-mutating webhook
+    served by KServe's own controller. A strategic merge on `inferenceservice-config` sets
+    `"defaultDeploymentMode": "Standard"` — what 0.20 calls raw deployment; `"RawDeployment"`
+    is accepted and converted, but deprecated — and flips `disableIngressCreation`, because an
+    Ingress named `<isvc>-<ns>.example.com` resolves nowhere on a segment with no resolver and
+    claims a class (`istio`) no controller here answers for. The rest of that key stays
+    upstream's verbatim: `NewIngressConfig` rejects an empty `ingressGateway` even in Standard
+    mode, where nothing reads it. The same patch and a second one on the default
+    `ClusterStorageContainer` fully qualify the storage initializer, and an `images:`
+    transformer qualifies the controller: CRI-O resolves a short name against
+    `unqualified-search-registries` (`registry.access.redhat.com` first, `docker.io` last)
+    rather than looking in the local store first, which on a node with no registry is an
+    `ImagePullBackOff`. Three `$patch: delete` files drop three of upstream's four workloads,
+    which MicroShift's **restricted-v2 SCC would reject anyway**: `llmisvc-controller-manager`
+    pins `runAsUser: 1000` and the SCC assigns a UID out of the namespace's
+    `openshift.io/sa.scc.uid-range`, and `kserve-localmodelnode-agent` mounts a `hostPath`,
+    which restricted-v2 does not permit at all; `kserve-localmodel-controller-manager` is the
+    agent's other half and `"localModel": {"enabled": false}`. Their CRDs, RBAC and webhooks
+    stay — each of those webhooks gates only its own resources
+    (`llminferenceservices`, `localmodelcaches`), which are never created here. One patch per
+    file and one resource per patch: the kustomize inside `oc` is older than the standalone
+    tool and **a multi-document patch file makes some of those versions panic** (v5.4.3 does,
+    v5.0.1 errors, v5.7.1 is fine). A patch matching nothing fails the build, which is what
+    catches a rename upstream; an `images:` entry matching nothing does not, which is why the
+    smoke test rejects a render still naming an unqualified image.
+    `kserve-cluster-resources.yaml` is deliberately **not** fetched: it carries fourteen
+    serving runtimes, and every image any of them names would have to be embedded.
+  - `030-triton-runtime/` — one `ClusterServingRuntime`, `triton-igpu`, upstream's
+    `kserve-tritonserver` spec with the four changes the Jetson and MicroShift force: the
+    `-py3-igpu` image (Tegra's integrated GPU is a separate build; the plain `-py3` tag finds
+    no GPU here), `nvidia.com/gpu: 1` in requests and limits (upstream asks for none, and the
+    device plugin only hands a GPU to a container that asks — one of the four time slices the
+    microshift layer publishes), no `runAsUser`, and a memory limit with room in it: on Tegra
+    the GPU has no memory of its own, so CUDA allocations come out of the same 32 GB the
+    cgroup accounts for, and upstream's 2 GiB is a limit the CUDA context alone approaches. Four
+    slices × 8 GiB is the whole SOM, so that number and the replica count come down together
+    when a real model lands. `tensorrt` carries no version — upstream says 8, JetPack 6.2
+    ships TensorRT 10 — and a plan file is specific to a TensorRT version and a GPU anyway, so
+    whatever goes in the model store has to be built by this JetPack's TensorRT on an Orin.
+    Deleting this directory is how the node is built without Triton; the image goes with it.
+  The images embedded are **derived from the render**, not listed beside it: the build runs the
+  microshift layer's `manifest-images.sh` over the roots and embeds what it prints, so the
+  version ARGs are the only pin and upstream keeps choosing its own `kube-rbac-proxy` and
+  `storage-initializer` tags. `SERVICE_IMAGES` remains for an image no manifest names. Seven
+  today: cert-manager ×3, `kserve-controller`, `kube-rbac-proxy`, `storage-initializer`,
+  Triton. `kserve/agent` and `kserve/router` are **not** among them, so the logger, batcher,
+  transformer and InferenceGraph paths do not work offline until they are added (and qualified
+  — nothing in the ConfigMap patch touches them).
+  Triton's igpu image is by far the largest thing in the pipeline, and the cache is paid for
+  twice on the eMMC: once in `/usr` and once when `copy-embedded-images.service` replays it
+  into containers-storage under `/var`. The smoke test prints `du -sh` of the cache for that
+  reason. Against a 40 GiB root this is the first thing to check in a build log, and the NVMe
+  upgrade in decision 3 is the fix if it does not fit.
+  The smoke test renders every root with `oc kustomize` — MicroShift will render the same
+  roots at start-up, and a root that does not render is a component that is silently never
+  applied — then checks the patched values are in the render, that the upstream fields the
+  patches had to rewrite whole are still there, that the only surviving workload is
+  `Deployment/kserve-controller-manager`, that every image is registry-qualified and embedded,
+  and that the `docker.io/kserve` images all share one tag (the version is repeated in two
+  patch files, and a stale one is a skew nothing else would catch).
 - `microshift/Containerfile` — `FROM` the bound-images layer via `ARG BASE_IMAGE`, then MicroShift 4.20 from
   `rhocp-4.20-for-rhel-9-aarch64-rpms` + `fast-datapath-for-rhel-9-aarch64-rpms`
   (`firewalld jq microshift microshift-release-info openshift-clients` — `oc` comes from
@@ -352,7 +422,7 @@ driver. If the installer shows no `mmcblk0`, this is the first thing to check (`
 `modprobe sdhci-tegra` on the installer console, Ctrl-Alt-F2) — not the kickstart. Unverified on
 hardware as of this writing.
 
-## Next step: validate on hardware, then the NVIDIA device plugin
+## Next step: validate on hardware, then the model and the app services
 
 1. Run `build-microshift.yml`, `dd` the ISO, boot the devkit from USB with QSPI flashed from R36.5.x.
    Confirm `bootc status`, `lsmod | grep nvgpu`, `nvidia-ctk cdi list` → `nvidia.com/gpu=all`,
@@ -366,10 +436,24 @@ hardware as of this writing.
    for the OOM that says the count is above what the SOM's RAM can hold.
    Confirm GitOps in the same pass: `oc get pods -n openshift-gitops` running with no
    registry reachable, and `argocd` CLI access if the RPM ships one.
-4. Add the bound app images (PostgreSQL, RabbitMQ, KServe, the model server) to
-   `SERVICE_IMAGES` in the `services` layer, and their manifests as one kustomize root per
-   component under `/etc/microshift/manifests.d/`.
-5. Verify a GPU pod schedules and KServe answers an inference request with no network attached.
+4. Confirm the services layer came up, in the order the roots are numbered and with no
+   registry reachable: `oc get pods -n cert-manager` (three, Running), `oc get pods -n kserve`
+   (one, `kserve-controller-manager`, two containers), and `oc get certificate -n kserve`
+   showing `serving-cert` Ready — that last one is the whole reason cert-manager is installed,
+   and until it is, every `serving.kserve.io` write fails closed. Then
+   `oc get clusterservingruntime triton-igpu`, which only admits once the KServe webhook has
+   its CA. `journalctl -u microshift | grep -i kustomization` is where a root that is still
+   retrying says so; it retries for ten minutes and then gives up quietly.
+5. Verify inference: an `InferenceService` in Standard mode, a model in the store, and a
+   request answered with no network attached. `oc get deployment -n <ns>` (KServe raw makes a
+   plain Deployment, not a Knative Service), `oc describe pod` to confirm the storage
+   initializer ran from the embedded image and the predictor holds `nvidia.com/gpu`, then
+   `curl` `/v2/models/<name>/infer` against the predictor's ClusterIP — there is no Ingress by
+   design. `serving.kserve.io/autoscalerClass: none` on the InferenceService is worth setting:
+   the default is `hpa` and an HPA has nothing to read if this MicroShift has no
+   metrics-server. Watch for the two things that can only fail on hardware: whether the igpu
+   image's CUDA userspace works against the base image's driver over CDI, and whether SELinux
+   lets a CRI-O container touch the Tegra device nodes.
 6. k3s variant, **on hold** — unvalidated on hardware and behind the microshift one. When it is
    picked back up (restore the `push:` trigger in `build-k3s.yml` first): confirm `k3s.service`
    comes up enforcing, that `k3s-stage-assets.service` staged the images before it, that
@@ -379,7 +463,16 @@ hardware as of this writing.
    unit pointing at the air-gapped registry, greenboot health checks, image signature policy in
    `/etc/containers/policy.json`.
 
-Open decisions to confirm with the maintainer before implementing: whether to keep the
+Open decisions to confirm with the maintainer before implementing: whether the Triton igpu
+image can live on the eMMC at all, given that the embedded cache is paid for twice (`/usr` plus
+the boot-time copy into `/var`) against a 40 GiB root — the alternatives are the NVMe upgrade in
+decision 3, or a Triton built with only the backends this model needs instead of NVIDIA's
+all-backends image; which Triton igpu tag matches L4T r36.5.0 (`25.02-py3-igpu` is the pin, and
+NGC's tag list and that release's JetPack version have not been checked from here); whether the
+three upstream KServe workloads deleted in `020-kserve/` should instead be patched into
+admissibility, if the local model cache turns out to be wanted on a disconnected node; whether the predictor should be reachable from off-node at all, which means an Ingress
+through MicroShift's router, port 80 opened in the firewall and a hosts entry per model, or a
+NodePort; whether to keep the
 entitlement-secret approach or stand up a self-hosted RHEL runner; whether the static
 192.168.1.10 / hostname `Jetson` baked into the ISO becomes per-device before a second node
 joins the air-gapped network; how the service images reach k3s's containerd, given that a second copy as

@@ -53,8 +53,9 @@ jobs:
     secrets: inherit
     permissions: { contents: read, packages: write }
 
-  # Application and model-serving images, on top of the cluster rather than
-  # under it. Empty until the first component lands.
+  # What runs on the cluster — cert-manager, KServe, the Triton runtime — on top
+  # of the cluster layer rather than under it, so a service or a model changing
+  # does not re-run the MicroShift install.
   services:
     needs: microshift
     uses: ./.github/workflows/build-image.yml

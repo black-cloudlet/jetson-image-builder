@@ -1,21 +1,50 @@
-# Layer 4, microshift variant. The services that run on the cluster: KServe and
-# the model server, PostgreSQL, RabbitMQ. Above the variant layer so a new model
-# does not re-run the MicroShift install and re-pull a nine-image control plane.
+# Layer 4, microshift variant. What runs on the cluster: cert-manager, KServe in
+# Standard (raw) deployment mode, and the NVIDIA Triton runtime that serves the
+# model — plus their container images, bound into /usr. Above the variant layer
+# so a new model or a new service does not re-run the MicroShift install and
+# re-pull a nine-image control plane.
 #
 # MicroShift-specific: k3s reads neither /etc/microshift/manifests.d nor
-# podman's containers-storage, so it needs its own layer staging into containerd.
+# podman's containers-storage, so it needs a layer staging into containerd.
 ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-microshift:latest
 FROM ${BASE_IMAGE}
 
-# Manifests go one kustomize root per component under /etc/microshift/manifests.d
-# — MicroShift renders every directory there, so nothing has to edit the device
-# plugin's kustomization.yaml a layer below.
-#
-# Pin by digest. Every image a manifest names must be listed here too; the smoke
-# test fails the build when one is not.
+# One kustomize root per component, numbered. MicroShift scans manifests.d at
+# every start, sorts the matches, and applies each root in turn with the
+# equivalent of kubectl apply -k, retrying a root that fails every 10s for up
+# to 10 minutes. That is what puts cert-manager before the KServe resources
+# that need its CRDs and webhook, KServe before the runtime whose CRD it
+# installs — and what bridges the gap between a CRD being applied in one root
+# and being established and served when the next one asks for it.
+COPY services/manifests/ /etc/microshift/manifests.d/
+
+# The upstream installs, curl'd rather than vendored: 8 MB of CRDs between them,
+# patched from the kustomize roots above, never forked. Pinned, never a channel
+# — cert-manager's static manifest is the whole install (no Helm, no
+# startupapicheck job), and kserve.yaml is the controller, its CRDs and its
+# configuration. kserve-cluster-resources.yaml is deliberately not fetched: it
+# carries fourteen serving runtimes and every image they name would have to be
+# embedded. 030-triton-runtime is the one we serve with.
+ARG CERT_MANAGER_VER=v1.21.2
+ARG KSERVE_VER=v0.20.0
+RUN curl -fsSL \
+      -o /etc/microshift/manifests.d/010-cert-manager/cert-manager.yaml \
+      "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VER}/cert-manager.yaml" && \
+    curl -fsSL -o /etc/microshift/manifests.d/020-kserve/kserve.yaml \
+      "https://github.com/kserve/kserve/releases/download/${KSERVE_VER}/kserve.yaml"
+
+# Embed what the manifests name, rather than a list kept beside them: the ARGs
+# above are the pin, and upstream picks its own kube-rbac-proxy and
+# storage-initializer tags. The scan renders each root with kustomize, so the
+# images: transformer and the patched ClusterStorageContainer are both seen.
+# SERVICE_IMAGES is for an image no manifest names.
+# && and the exit in the loop: a `;` chain takes the last command's status,
+# hiding a copy that failed earlier.
 ARG SERVICE_IMAGES=""
 RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
-    for img in ${SERVICE_IMAGES} ; do \
+    images="$(/opt/microshift/manifest-images.sh \
+        /etc/microshift/manifests.d/*/)" && \
+    for img in ${images} ${SERVICE_IMAGES} ; do \
         /opt/physically-bound-images/embed_image.sh "${img}" \
             --authfile /run/secrets/pull-secret.json || exit 1 ; \
     done
