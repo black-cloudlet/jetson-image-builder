@@ -1,11 +1,13 @@
-# 3/3, k3s variant. Sits beside microshift/ and consumes the same apps layer, so
-# a change to an application image does not rebuild either control plane.
+# Layer 3, k3s variant. Sits beside microshift/ and consumes the same shared
+# layers. It has no services layer yet: services/ embeds into podman's
+# containers-storage and writes /etc/microshift/manifests.d, and k3s reads
+# neither.
 #
 # k3s comes from its GitHub release, pinned by tag: the binary and the air-gap
 # image tarball are published there together and move as one, whereas Rancher's
 # RPM repo is a rolling channel. That repo is still used for one thing — the
 # SELinux policy, which is not something to hand-roll.
-ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-apps:latest
+ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-bound-images:latest
 FROM ${BASE_IMAGE}
 
 # The image is aarch64-only, so the release asset suffix is fixed. `+` has to be
@@ -71,13 +73,13 @@ RUN mkdir -p /usr/share/k3s/manifests && \
       "https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/${NVIDIA_DEVICE_PLUGIN_VER}/deployments/static/nvidia-device-plugin.yml"
 
 # The plugin image, named by the manifest ("- image:" list form, hence the field
-# scan). k3s's containerd cannot read the podman store that the apps layer's
-# embed_image.sh writes to, so the image is staged as a docker-archive tarball
-# beside the control plane's instead. No --preserve-digests: docker-archive
-# cannot hold an OCI manifest, and the manifest pins by tag anyway.
+# scan). k3s's containerd cannot read the podman store that embed_image.sh
+# writes to, so the image is staged as a docker-archive tarball beside the
+# control plane's instead. No --preserve-digests: docker-archive cannot hold an
+# OCI manifest, and the manifest pins by tag anyway.
 #
-# APP_IMAGES from the apps layer land in that podman store and are therefore
-# still invisible to k3s. Converting them needs a second copy of every layer in
+# The same gap is why k3s has no services layer: services/ embeds into that
+# podman store. Converting those images needs a second copy of every layer in
 # /usr, so it is a decision for when the first application image lands.
 RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
     img="$(awk '{for(i=1;i<NF;i++) if($i=="image:"){gsub(/"/,"",$(i+1)); print $(i+1)}}' \

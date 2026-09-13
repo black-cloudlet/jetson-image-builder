@@ -1,0 +1,23 @@
+# Layer 4, microshift variant. The services that run on the cluster: KServe and
+# the model server, PostgreSQL, RabbitMQ. Above the variant layer so a new model
+# does not re-run the MicroShift install and re-pull a nine-image control plane.
+#
+# MicroShift-specific: k3s reads neither /etc/microshift/manifests.d nor
+# podman's containers-storage, so it needs its own layer staging into containerd.
+ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-microshift:latest
+FROM ${BASE_IMAGE}
+
+# Manifests go one kustomize root per component under /etc/microshift/manifests.d
+# — MicroShift renders every directory there, so nothing has to edit the device
+# plugin's kustomization.yaml a layer below.
+#
+# Pin by digest. Every image a manifest names must be listed here too; the smoke
+# test fails the build when one is not.
+ARG SERVICE_IMAGES=""
+RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
+    for img in ${SERVICE_IMAGES} ; do \
+        /opt/physically-bound-images/embed_image.sh "${img}" \
+            --authfile /run/secrets/pull-secret.json || exit 1 ; \
+    done
+
+RUN bootc container lint

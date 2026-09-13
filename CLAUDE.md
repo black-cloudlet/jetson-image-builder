@@ -3,7 +3,7 @@
 Provisioning and image pipeline for NVIDIA Jetson AGX Orin edge nodes running RHEL image mode
 (bootc) in a disconnected environment. Read this whole file before touching anything.
 
-**Two repos.** This one holds the image pipeline (`microshift/`, `physically-bound-images/`,
+**Two repos.** This one holds the image pipeline (`base/`, `microshift/`, `services/`,
 `.github/workflows/`). The flashing-station tooling — `mirror.sh`,
 `install-offline.sh` and the station-side flashing docs — lives in
 `black-cloudlet/jetson-installer-config`. The split is deliberate: mirroring RPMs and flashing
@@ -123,20 +123,39 @@ Target stack on the device:
    RHEL's `storage.conf` then defeats the bind on its own: it mounts overlay with `metacopy=on`,
    which also forces the naive diff, so the step strips that option too. It fails unless
    `podman info` reports `Native Overlay Diff:true`.
-7. **Three layers, one directory per Kubernetes variant.** `base/` republishes the pinned
-   vendor image under our own name and adds nothing — it exists so the pin lives in one file
-   and so there is a stable internal name to mirror into the air-gapped registry. `apps/`
-   builds `FROM` it with the physically-bound-images machinery and the application images every
-   variant needs. `microshift/` builds `FROM` that and adds MicroShift, the device plugin and
-   their images. `k3s/` sits beside `microshift/` and reuses `base` and `apps` untouched; it is
-   on hold and does not build automatically.
-   The split is about rebuild cost: a variant layer pulls a whole control plane (MicroShift's is
-   nine images) and that should not be redone whenever an application image or a model changes.
+7. **Four layers for microshift, three for k3s, one directory per Kubernetes variant.**
+   The two shared layers share the `base/` directory and are two images.
+   `base/Containerfile` republishes the pinned vendor image under our own name and adds
+   nothing — the pin lives in one file, the air-gapped mirror gets a name we control, and the
+   digest stays a pure republish of what Red Hat ships.
+   `base/Containerfile.bound-images` builds `FROM` it with the physically-bound-images
+   machinery — the two scripts and the boot-time unit — and nothing else. One directory because
+   both are infrastructure under every variant rather than a variant of their own; two images
+   because a bare republish is worth being able to point at. It was a directory of its own once
+   (`apps/`), which also held the application images, below the variant layers, where changing
+   one re-ran the whole MicroShift install.
+   `microshift/` builds `FROM` bound-images and adds MicroShift, the device plugin and their
+   images.
+   `services/` builds `FROM` **that** and holds the application and model-serving images —
+   KServe, the model server, PostgreSQL, RabbitMQ — and their manifests.
+   `k3s/` sits beside `microshift/` and reuses both shared layers untouched; it is on hold and
+   does not build automatically, and it has no services layer either way, because `services/` embeds for
+   podman's containers-storage and writes `/etc/microshift/manifests.d`, and k3s reads neither.
+   The split that remains is about rebuild cost: a variant layer pulls a whole control plane
+   (MicroShift's is nine images) and that should not be redone whenever a service image or a
+   model changes. That is why those images sit **above** the variant layer. They used to be
+   below it, where changing one re-ran the MicroShift RPM install and re-pulled all nine — the
+   layer split was there but pointing the wrong way.
    Each layer is pushed separately as
    `jetson-orin-bootc-<name>` and the next builds on its **digest**, not its tag. CI is two
    reusable workflows — `build-image.yml` (one layer) and `build-iso.yml` — plus a caller per
-   variant chaining base → variant → ISO. Shared tooling (`physically-bound-images/`) stays at
-   the root and the build context is the repository root so any layer can `COPY` it. Every
+   variant chaining base → bound-images → variant → (services) → ISO, the ISO built from the
+   top of the chain. The bound-images job is `bound_images` in CI with an underscore, because
+   `needs.bound-images` parses as a subtraction and would resolve to nothing rather than fail;
+   the image it publishes keeps the hyphen. The build context is the repository root, so any layer can `COPY` from any
+   directory — the embedding scripts sit in `base/` beside the Containerfile that installs
+   them, and the path they are installed to (`/opt/physically-bound-images/`) keeps the full
+   name because the unit and both variant layers call it. Every
    layer registers with subscription-manager, including the two that install no RPMs: one code
    path for every layer beats a per-layer entitlement flag. Layout and the
    reusable-workflow split follow
@@ -167,15 +186,26 @@ Target stack on the device:
 Both scripts are idempotent and re-runnable. They have been exercised end to end: the station
 was provisioned from the bundle and the devkit was flashed with the QSPI command above.
 
-### bootc image + installer ISO pipeline (`microshift/`, `physically-bound-images/`, `.github/workflows/`)
+### bootc image + installer ISO pipeline (`base/`, `microshift/`, `services/`, `.github/workflows/`)
 
 - `base/Containerfile` — `FROM` the pinned JetPack-for-RHEL image and nothing else, plus
   `bootc container lint`. Republished as `jetson-orin-bootc-base`.
-- `apps/Containerfile` — `FROM` the base layer via `ARG BASE_IMAGE`; installs the
-  physically-bound-images scripts and `copy-embedded-images.service`, and embeds whatever
-  `APP_IMAGES` names (empty today; PostgreSQL, RabbitMQ, KServe and the model server go here).
-  No `dnf`, so neither this nor the base build needs entitlement.
-- `microshift/Containerfile` — `FROM` the apps layer via `ARG BASE_IMAGE`, then MicroShift 4.20 from
+- `base/Containerfile.bound-images` — `FROM` that via `ARG BASE_IMAGE`; installs the
+  physically-bound-images scripts and `copy-embedded-images.service`, and nothing else.
+  Published as `jetson-orin-bootc-bound-images`. No `dnf`, so neither shared layer needs
+  entitlement. Its smoke test fails if an image cache exists in this layer at all: anything
+  embedded here is paid for by every variant, which is the cost `services/` exists to avoid.
+- `services/Containerfile` — `FROM` the microshift layer via `ARG BASE_IMAGE`; embeds whatever
+  `SERVICE_IMAGES` names (empty today; PostgreSQL, RabbitMQ, KServe and the model server go
+  here) and is where their manifests go, one kustomize root per component under
+  `/etc/microshift/manifests.d/` — MicroShift renders every directory there, so a component is
+  added or dropped without editing the device plugin's `kustomization.yaml`, which lives a
+  layer below and cannot be reached from here. No `dnf`, so no entitlement needed.
+  The smoke test runs the microshift layer's `manifest-images.sh` over those roots and fails
+  if a manifest names an image `SERVICE_IMAGES` does not: the two are written separately and
+  nothing else ties them together, so the miss would otherwise surface as a pod in
+  `ImagePullBackOff` on a disconnected node rather than as a red build.
+- `microshift/Containerfile` — `FROM` the bound-images layer via `ARG BASE_IMAGE`, then MicroShift 4.20 from
   `rhocp-4.20-for-rhel-9-aarch64-rpms` + `fast-datapath-for-rhel-9-aarch64-rpms`
   (`firewalld jq microshift microshift-release-info openshift-clients` — `oc` comes from
   `openshift-clients`; the `microshift` RPM ships no client), the firewall rules (trusted: pod CIDR
@@ -183,7 +213,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   6443), the
   `microshift-make-rshared.service` OVN needs, and every MicroShift container image embedded
   into `/usr/lib/containers-image-cache` with a `microshift.service.d` drop-in that orders them
-  into containers-storage before the service starts (the unit itself lives in the apps layer;
+  into containers-storage before the service starts (the unit itself lives in the bound-images layer;
   this one only orders against it), plus the NVIDIA device plugin
   (`nvidia-ctk runtime configure --runtime=crio` writing
   `/etc/crio/crio.conf.d/99-nvidia.toml`, the plugin manifest and a kustomization in
@@ -218,7 +248,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   lists the control plane only; the device plugin's image and Argo CD's are named
   nowhere but in the manifests that deploy them, and an `images:` transformer defeats a
   grep. The build embeds what it prints; the smoke test re-runs it against the cache.
-- `physically-bound-images/{embed_image.sh,copy_embedded_images.sh}` — adapted from
+- `base/{embed_image.sh,copy_embedded_images.sh}` — adapted from
   `redhat-et/edge-ai-image-pipelines` (Apache-2.0). Cache is `/usr/lib/containers-image-cache`
   with a `mapping.txt` of reference -> sha, replayed once per boot by
   `copy-embedded-images.service` (a standalone oneshot, with `Requires=`/`After=` on
@@ -228,7 +258,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   not handle. The unit deliberately does **not** want `network-online.target`: the copy is
   local-disk only and waiting for a carrier that never comes would add
   NetworkManager-wait-online's timeout to every boot.
-- `k3s/Containerfile` — `FROM` the apps layer via `ARG BASE_IMAGE`, then k3s (pinned
+- `k3s/Containerfile` — `FROM` the bound-images layer via `ARG BASE_IMAGE`, then k3s (pinned
   `K3S_VERSION`, default `v1.36.4+k3s1`) as the `k3s-arm64` static binary into `/usr/bin/k3s`
   with the usual `kubectl`/`crictl`/`ctr` argv[0] symlinks — `/usr/local` is machine state on
   bootc, so upstream's install script and its `/usr/local/bin` default are not usable. Only
@@ -243,9 +273,9 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   through a RuntimeClass unless it is the default — the same choice `--set-as-default` makes under
   CRI-O, and it keeps the stock device-plugin manifest usable unmodified. Images are the release's
   `k3s-airgap-images-arm64.tar.zst` plus the device plugin as a `docker-archive` tarball, both in
-  `/usr/share/k3s/agent-images`; **the apps layer's `embed_image.sh` cache is useless here**,
-  because it writes into podman's containers-storage and k3s's containerd does not read it, so
-  `APP_IMAGES` will need a second staging path before the first application image lands.
+  `/usr/share/k3s/agent-images`; **`embed_image.sh`'s cache is useless here**, because it writes
+  into podman's containers-storage and k3s's containerd does not read it, so a k3s services layer
+  needs a second staging path before the first application image lands.
 - `k3s/stage-assets.sh` + `k3s-stage-assets.service` — `/var` is machine state, so neither
   `/var/lib/rancher/k3s/agent/images` nor `.../server/manifests` exists at first boot. The unit is
   a oneshot ordered `Before=k3s.service` (and `Requires=`d by it) rather than `tmpfiles.d`, so an
@@ -259,14 +289,14 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   filesystem, so free extents would be space the cluster cannot reach. ISO label
   `JETSON_ORIN_K3S`, distinct from the microshift ISO's — anaconda finds its stage2 by label, and
   two variants sharing one would pick whichever stick enumerated first.
-- `.github/workflows/build-k3s.yml` — the microshift caller with the top two jobs repointed;
-  `base` and `apps` are identical. **On hold: `workflow_dispatch` only, no `push:` trigger.**
-  The variant is unvalidated on hardware, and `base/**` and `apps/**` matched both callers, so
-  every change below the control plane rebuilt and re-pushed those two layers a second time and
-  then pulled a whole k3s control plane nobody is booting yet. Nothing is deleted: a manual
-  dispatch still builds base → apps → k3s → ISO, and copying the `push:` block back from
-  `build-microshift.yml` (with `k3s/**` in its paths) re-enables automatic builds — and with them
-  the duplicate base/apps build, which was accepted because the alternative is one workflow
+- `.github/workflows/build-k3s.yml` — the microshift caller with the top job repointed and no
+  services job; the two shared jobs are identical. **On hold: `workflow_dispatch` only, no
+  `push:` trigger.** The variant is unvalidated on hardware, and `base/**` matched both callers,
+  so every change to a shared layer rebuilt and re-pushed it a second time and then pulled a
+  whole k3s control plane nobody is booting yet. Nothing is deleted: a manual dispatch still
+  builds base → bound-images → k3s → ISO, and copying the `push:` block back from
+  `build-microshift.yml` (with `k3s/**` in its paths) re-enables automatic builds — and with
+  them the duplicate shared builds, which was accepted because the alternative is one workflow
   fanning out, coupling the variants' release cadence.
 - `microshift/config.toml` — bib config with a **custom kickstart** (bib then adds only `ostreecontainer`;
   `[customizations.user]`/`filesystem` cannot be combined with a custom kickstart, so
@@ -336,8 +366,9 @@ hardware as of this writing.
    for the OOM that says the count is above what the SOM's RAM can hold.
    Confirm GitOps in the same pass: `oc get pods -n openshift-gitops` running with no
    registry reachable, and `argocd` CLI access if the RPM ships one.
-4. Add the bound app images (PostgreSQL, RabbitMQ, KServe, the model server) through
-   `embed_image.sh`, and their manifests to `/etc/microshift/manifests/kustomization.yaml`.
+4. Add the bound app images (PostgreSQL, RabbitMQ, KServe, the model server) to
+   `SERVICE_IMAGES` in the `services` layer, and their manifests as one kustomize root per
+   component under `/etc/microshift/manifests.d/`.
 5. Verify a GPU pod schedules and KServe answers an inference request with no network attached.
 6. k3s variant, **on hold** — unvalidated on hardware and behind the microshift one. When it is
    picked back up (restore the `push:` trigger in `build-k3s.yml` first): confirm `k3s.service`
@@ -351,8 +382,9 @@ hardware as of this writing.
 Open decisions to confirm with the maintainer before implementing: whether to keep the
 entitlement-secret approach or stand up a self-hosted RHEL runner; whether the static
 192.168.1.10 / hostname `Jetson` baked into the ISO becomes per-device before a second node
-joins the air-gapped network; how `APP_IMAGES` reach k3s's containerd, given that a second copy as
-`docker-archive` would put every application layer in `/usr` twice; and whether the k3s node's
+joins the air-gapped network; how the service images reach k3s's containerd, given that a second copy as
+`docker-archive` would put every application layer in `/usr` twice, and that k3s therefore
+needs its own services layer rather than a share of `services/`; and whether the k3s node's
 kubeconfig (`/etc/rancher/k3s/k3s.yaml`, root-only) should be opened to the `jetson` user the way
 `openshift-clients` opens the microshift one.
 

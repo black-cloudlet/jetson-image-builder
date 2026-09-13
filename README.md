@@ -6,56 +6,86 @@ image mode (aarch64), for deployment into a disconnected environment.
 The device OS is Red Hat's JetPack-for-RHEL bootc image (RHEL 9.8, JetPack 6.2.2 / L4T r36.5.0,
 kernel 5.14.0-687.42.1). Each **variant** is a directory deriving from it and layering on a
 Kubernetes distribution, with every container image embedded so the cluster starts with no
-registry reachable. There are two variants, `microshift/` and `k3s/`, built from the same `base`
-and `apps` layers. **`k3s/` is currently on hold**: the files are kept, but its workflow runs only
-on manual dispatch.
+registry reachable. There are two variants, `microshift/` and `k3s/`, built from the same two
+shared layers in `base/`. **`k3s/` is currently on hold**: the files are kept, but its workflow runs only on
+manual dispatch.
 
 Every layer is published as `ghcr.io/black-cloudlet/jetson-orin-bootc-<layer>:<YYYYMMDD-sha8>`,
 and the finished variant also uploads an installer ISO as a workflow artifact.
 
-Each variant is built as **three layers**, each pushed separately and each building on the
-previous one's digest:
+Each layer is pushed separately and builds on the previous one's digest — four for microshift,
+three for k3s. The two shared layers share the `base/` directory, as `Containerfile` and
+`Containerfile.bound-images`:
 
 ```
-base   the pinned vendor image, republished under our own name
+base           the pinned vendor image republished under our own name, nothing added
   |
-apps   physically-bound-images machinery + APP_IMAGES
+bound-images   the image-embedding machinery: the scripts and the boot-time unit
   |
 microshift   MicroShift 4.20 + NVIDIA device plugin + their images
- or
+  |            |
+  |          services   application and model-serving images + their manifests
+ or           |
 k3s          k3s + NVIDIA device plugin + their images
   |
 ISO
 ```
 
-Changing an application image rebuilds `apps` and above but not `base`; changing the MicroShift
-version rebuilds only that variant's top layer and does not re-pull the application images. `k3s/`
-reuses `base` and `apps` untouched, so the two variants share everything below the control plane.
+Application images sit **above** the variant layer, not below it: changing a model or a service
+image rebuilds `services` alone, and does not re-run the MicroShift RPM install or re-pull a
+nine-image control plane. Changing the MicroShift version rebuilds `microshift` and `services`
+but not `base` or `bound-images`. `k3s/` reuses both untouched, so the two variants share the
+vendor image and the embedding machinery; it has no services layer yet, because `services/`
+embeds into podman's containers-storage and writes `/etc/microshift/manifests.d`, and k3s reads
+neither.
+
+The two shared layers are two `Containerfile`s in one directory. Same directory because both are
+infrastructure under every variant rather than a variant of their own; separate images so the
+`base` digest stays a pure republish of what Red Hat ships.
+
+## Embedded images
+
+The node has no network at first boot, so every container image it will ever run is copied into
+`/usr/lib/containers-image-cache` at build time and replayed into containers-storage at boot. The
+build cannot simply `podman pull`: storage is overlayfs on overlayfs, and the vfs fallback would
+cost image size × layer count.
+
+Each layer embeds its own: `microshift` takes MicroShift's control plane and the device plugin,
+`services` takes whatever `SERVICE_IMAGES` names. **An image a manifest names but `SERVICE_IMAGES`
+does not is a pod stuck in `ImagePullBackOff` on a disconnected node**, so `services/smoke-test.sh`
+renders the manifests and fails the build instead.
 
 | Path | Does |
 | ---- | ---- |
 | `base/Containerfile` | the pinned JetPack-for-RHEL image, republished; adds nothing |
 | `base/smoke-test.sh` | checks the vendor image is still what CLAUDE.md says it is |
-| `apps/Containerfile` | `FROM` base + physically-bound-images machinery + `APP_IMAGES` |
-| `apps/smoke-test.sh` | checks the embedding machinery and any embedded application images |
-| `microshift/Containerfile` | `FROM` apps + MicroShift 4.20 + NVIDIA device plugin + their images |
+| `base/Containerfile.bound-images` | `FROM` base + the physically-bound-images machinery, nothing else |
+| `base/smoke-test.bound-images.sh` | checks the machinery, and that no image was embedded in this layer |
+| `base/embed_image.sh` | build time: copy one image into the cache baked into the OS image |
+| `base/copy_embedded_images.sh` | boot time: replay that cache into containers-storage |
+| `microshift/Containerfile` | `FROM` bound-images + MicroShift 4.20 + NVIDIA device plugin + their images |
 | `microshift/config.toml` | bootc-image-builder config — the unattended kickstart and the ISO label |
 | `microshift/smoke-test.sh` | checks run inside the finished image before it is pushed |
-| `k3s/Containerfile` | `FROM` apps + k3s + NVIDIA device plugin + their images |
+| `services/Containerfile` | `FROM` microshift + `SERVICE_IMAGES` and their manifests |
+| `services/smoke-test.sh` | checks the cluster layer underneath survived, and the image cache is whole |
+| `k3s/Containerfile` | `FROM` bound-images + k3s + NVIDIA device plugin + their images |
 | `k3s/stage-assets.sh` | copies the baked-in images and manifests under `/var/lib/rancher` at boot |
 | `k3s/config.toml` | bootc-image-builder config — kickstart and ISO label for the k3s variant |
 | `k3s/smoke-test.sh` | checks run inside the finished image before it is pushed |
-| `physically-bound-images/` | shared scripts: embed at build time, replay into containers-storage at boot |
 | `.github/workflows/build-image.yml` | reusable — builds and pushes one layer |
 | `.github/workflows/build-iso.yml` | reusable — turns a pushed image into an installer ISO |
-| `.github/workflows/build-microshift.yml` | caller — chains base → apps → microshift → ISO |
-| `.github/workflows/build-k3s.yml` | caller — chains base → apps → k3s → ISO; on hold, manual dispatch only |
+| `.github/workflows/build-microshift.yml` | caller — chains base → bound-images → microshift → services → ISO |
+| `.github/workflows/build-k3s.yml` | caller — chains base → bound-images → k3s → ISO; on hold, manual dispatch only |
+
+The bound-images job is spelled `bound_images` in the callers: a hyphen in a job id makes
+`needs.bound-images` parse as a subtraction, which resolves to nothing instead of failing. The
+image it publishes keeps the hyphen.
 
 ## Adding a variant
 
-Create `<name>/` with a `Containerfile` (`FROM` the apps layer via an `ARG BASE_IMAGE`), a
+Create `<name>/` with a `Containerfile` (`FROM` the bound-images layer via an `ARG BASE_IMAGE`), a
 `config.toml` and a `smoke-test.sh`, then copy `build-microshift.yml` and point its top job and
-`iso` job at the new directory. The `base` and `apps` jobs are reused unchanged.
+`iso` job at the new directory. The `base` and `bound-images` jobs are reused unchanged.
 
 Nothing in the reusable workflows is MicroShift-specific: layer-shaped checks live in each
 layer's own `smoke-test.sh`, and the kickstart in the variant's own `config.toml` — MicroShift's
@@ -231,18 +261,21 @@ that alone overran the disk.
 
 The MicroShift layer needs entitlement, so this does not work on an unsubscribed host. On a
 registered host podman injects the entitlement itself, so only the pull secret has to be
-passed — and the base layer needs neither:
+passed — and the two shared layers need neither:
 
 ```
 sudo podman build -t localhost/jetson-orin-bootc-base:dev -f base/Containerfile .
 sudo podman build \
-  --secret id=pullsecret,src=$HOME/pull-secret.json \
   --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-base:dev \
-  -t localhost/jetson-orin-bootc-apps:dev -f apps/Containerfile .
+  -t localhost/jetson-orin-bootc-bound-images:dev -f base/Containerfile.bound-images .
 sudo podman build \
   --secret id=pullsecret,src=$HOME/pull-secret.json \
-  --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-apps:dev \
+  --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-bound-images:dev \
   -t localhost/jetson-orin-bootc-microshift:dev -f microshift/Containerfile .
+sudo podman build \
+  --secret id=pullsecret,src=$HOME/pull-secret.json \
+  --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-microshift:dev \
+  -t localhost/jetson-orin-bootc-services:dev -f services/Containerfile .
 sed -e "s|@JETSON_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
     -e "s|@JETSON_PASSWORD_HASH@|$(openssl passwd -6)|" microshift/config.toml > /tmp/config.toml
 mkdir output
@@ -250,5 +283,5 @@ sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfi
   -v /tmp/config.toml:/config.toml:ro -v ./output:/output \
   -v /var/lib/containers/storage:/var/lib/containers/storage \
   registry.redhat.io/rhel9/bootc-image-builder:latest \
-  --type anaconda-iso --config /config.toml localhost/jetson-orin-bootc-microshift:dev
+  --type anaconda-iso --config /config.toml localhost/jetson-orin-bootc-services:dev
 ```

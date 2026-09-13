@@ -1,10 +1,12 @@
-# base -> apps -> k3s -> ISO. The k3s variant of build-microshift.yml: it reuses
-# base and apps untouched, so only the last two jobs differ.
+# base -> bound-images -> k3s -> ISO. The k3s variant of build-microshift.yml:
+# it reuses both shared layers untouched, so only the last two jobs differ. No
+# services job — services/ embeds into podman's containers-storage, which k3s's
+# containerd cannot read.
 #
 # ON HOLD: manual dispatch only, no push trigger. The variant is unvalidated on
-# hardware and base/** and apps/** match both callers, so every change below the
-# control plane used to rebuild and re-push those two layers a second time and
-# then pull a whole k3s control plane nobody is booting yet. Nothing is deleted:
+# hardware and base/** matches both callers, so every change to the shared
+# layers used to rebuild and re-push them a second time and then pull a whole
+# k3s control plane nobody is booting yet. Nothing is deleted:
 # `workflow_dispatch` still builds the full chain on demand, and copying the
 # `push:` block from build-microshift.yml (with k3s/** in its paths) turns
 # automatic builds back on.
@@ -14,7 +16,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Republishes the pinned vendor image.
+  # The pinned vendor image, republished. Shared by every variant.
   base:
     uses: ./.github/workflows/build-image.yml
     with:
@@ -24,26 +26,29 @@ jobs:
     secrets: inherit
     permissions: { contents: read, packages: write }
 
-  # Embedding machinery and app images. Shared by every variant.
-  apps:
+  # The image-embedding machinery. Shared by every variant.
+  # Job id with an underscore, image name with a hyphen: needs.bound-images
+  # parses as a subtraction, so a dotted reference to a hyphenated id resolves
+  # to nothing instead of failing.
+  bound_images:
     needs: base
     uses: ./.github/workflows/build-image.yml
     with:
-      name: apps
-      containerfile: apps/Containerfile
-      smoke-test: apps/smoke-test.sh
+      name: bound-images
+      containerfile: base/Containerfile.bound-images
+      smoke-test: base/smoke-test.bound-images.sh
       build-args: BASE_IMAGE=${{ needs.base.outputs.image-ref }}
     secrets: inherit
     permissions: { contents: read, packages: write }
 
   k3s:
-    needs: apps
+    needs: bound_images
     uses: ./.github/workflows/build-image.yml
     with:
       name: k3s
       containerfile: k3s/Containerfile
       smoke-test: k3s/smoke-test.sh
-      build-args: BASE_IMAGE=${{ needs.apps.outputs.image-ref }}
+      build-args: BASE_IMAGE=${{ needs.bound_images.outputs.image-ref }}
     secrets: inherit
     permissions: { contents: read, packages: write }
 
