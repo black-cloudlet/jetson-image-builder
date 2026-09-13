@@ -28,8 +28,20 @@ rpm -q nvidia-jetpack-for-rhel-9.8-kmod nvidia-container-toolkit-base
 ls /usr/lib/modules/*/extra/drivers/gpu/nvgpu/nvgpu.ko
 
 echo "== microshift =="
-rpm -q microshift microshift-release-info openshift-clients
+rpm -q microshift microshift-release-info openshift-clients microshift-gitops
 oc version --client
+
+# The RPM is only manifests; if it stopped shipping them, Argo CD would silently
+# never deploy. || true so a missing directory reaches the message, not set -e.
+gitops_roots=$(find /usr/lib/microshift/manifests.d -maxdepth 1 -mindepth 1 -type d \
+	-name '*gitops*' 2>/dev/null || true)
+if [[ -z $gitops_roots ]]; then
+	echo "microshift-gitops shipped no manifest root under /usr/lib/microshift/manifests.d"
+	ls -la /usr/lib/microshift/manifests.d 2>&1 | sed 's/^/   /'
+	exit 1
+fi
+echo "gitops manifest roots:"
+echo "$gitops_roots" | sed 's/^/   /'
 for unit in microshift microshift-make-rshared copy-embedded-images; do
 	test -L "/etc/systemd/system/multi-user.target.wants/${unit}.service" \
 		|| { echo "not enabled: ${unit}.service"; exit 1; }
@@ -95,9 +107,19 @@ while IFS=, read -r img sha; do
 		|| { echo "missing embedded image: ${img}"; exit 1; }
 done < "$mapping"
 
-# The device plugin pod cannot start on a disconnected node unless its own
-# image was embedded alongside MicroShift's.
-grep -q 'k8s-device-plugin' "$mapping" \
-	|| { echo "device plugin image was not embedded"; exit 1; }
+# Whether the images the manifests will ask for are actually in the cache.
+# embed_image.sh names the directory after `echo "$ref" | sha256sum`, newline
+# and all, so recompute it rather than match the mapping's rewritten name.
+echo "== manifest images =="
+while read -r img; do
+	fsha="$(echo "$img" | sha256sum | awk '{ print $1 }')"
+	if [[ ! -f /usr/lib/containers-image-cache/${fsha}/manifest.json ]]; then
+		echo "manifest image was not embedded: ${img}"
+		exit 1
+	fi
+	echo "   embedded: ${img}"
+done < <(/opt/microshift/manifest-images.sh \
+	/usr/lib/microshift/manifests /usr/lib/microshift/manifests.d/*/ \
+	/etc/microshift/manifests /etc/microshift/manifests.d/*/)
 
 echo "all checks passed"

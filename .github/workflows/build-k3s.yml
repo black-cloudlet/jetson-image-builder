@@ -1,23 +1,16 @@
 # base -> apps -> k3s -> ISO. The k3s variant of build-microshift.yml: it reuses
 # base and apps untouched, so only the last two jobs differ.
 #
-# base/** and apps/** trigger this and the microshift caller alike, so a change
-# there rebuilds and re-pushes those two layers once per variant. Left as is:
-# the alternative is one workflow that fans out, which couples the variants'
-# release cadence for the sake of a few minutes of runner time.
+# ON HOLD: manual dispatch only, no push trigger. The variant is unvalidated on
+# hardware and base/** and apps/** match both callers, so every change below the
+# control plane used to rebuild and re-push those two layers a second time and
+# then pull a whole k3s control plane nobody is booting yet. Nothing is deleted:
+# `workflow_dispatch` still builds the full chain on demand, and copying the
+# `push:` block from build-microshift.yml (with k3s/** in its paths) turns
+# automatic builds back on.
 name: k3s image + installer ISO
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - base/**
-      - apps/**
-      - k3s/**
-      - physically-bound-images/**
-      - .github/workflows/build-k3s.yml
-      - .github/workflows/build-image.yml
-      - .github/workflows/build-iso.yml
   workflow_dispatch:
 
 jobs:

@@ -7,7 +7,8 @@ The device OS is Red Hat's JetPack-for-RHEL bootc image (RHEL 9.8, JetPack 6.2.2
 kernel 5.14.0-687.42.1). Each **variant** is a directory deriving from it and layering on a
 Kubernetes distribution, with every container image embedded so the cluster starts with no
 registry reachable. There are two variants, `microshift/` and `k3s/`, built from the same `base`
-and `apps` layers.
+and `apps` layers. **`k3s/` is currently on hold**: the files are kept, but its workflow runs only
+on manual dispatch.
 
 Every layer is published as `ghcr.io/black-cloudlet/jetson-orin-bootc-<layer>:<YYYYMMDD-sha8>`,
 and the finished variant also uploads an installer ISO as a workflow artifact.
@@ -48,7 +49,7 @@ reuses `base` and `apps` untouched, so the two variants share everything below t
 | `.github/workflows/build-image.yml` | reusable — builds and pushes one layer |
 | `.github/workflows/build-iso.yml` | reusable — turns a pushed image into an installer ISO |
 | `.github/workflows/build-microshift.yml` | caller — chains base → apps → microshift → ISO |
-| `.github/workflows/build-k3s.yml` | caller — chains base → apps → k3s → ISO |
+| `.github/workflows/build-k3s.yml` | caller — chains base → apps → k3s → ISO; on hold, manual dispatch only |
 
 ## Adding a variant
 

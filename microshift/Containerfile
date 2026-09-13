@@ -3,17 +3,23 @@
 ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-apps:latest
 FROM ${BASE_IMAGE}
 
-# rhocp and fast-datapath are entitlement-gated: the build runs in a registered
-# UBI container, or on a subscribed RHEL host where podman injects entitlement.
-# No `dnf upgrade` — it could pull a kernel past the one the Tegra kmod is built
-# against. --enablerepo avoids depending on dnf-plugins-core in the base.
+# rhocp, fast-datapath and gitops are entitlement-gated: the build runs in a
+# registered UBI container, or on a subscribed RHEL host where podman injects
+# entitlement. No `dnf upgrade` — it could pull a kernel past the one the Tegra
+# kmod is built against. --enablerepo avoids depending on dnf-plugins-core in
+# the base.
 # openshift-clients is `oc`: the microshift RPM ships no client at all, and
 # without it the node cannot inspect its own cluster.
+# microshift-gitops is core Argo CD as manifests under
+# /usr/lib/microshift/manifests.d, from the GitOps channel rather than rhocp.
 ARG USHIFT_VER=4.20
+ARG GITOPS_VER=1.19
 RUN dnf install -y \
         --enablerepo="rhocp-${USHIFT_VER}-for-rhel-9-$(uname -m)-rpms" \
         --enablerepo="fast-datapath-for-rhel-9-$(uname -m)-rpms" \
-        firewalld jq microshift microshift-release-info openshift-clients && \
+        --enablerepo="gitops-${GITOPS_VER}-for-rhel-9-$(uname -m)-rpms" \
+        firewalld jq microshift microshift-release-info openshift-clients \
+        microshift-gitops && \
     systemctl enable microshift && \
     dnf clean all
 
@@ -65,15 +71,22 @@ RUN mkdir -p /etc/microshift/manifests && \
 # not a fork: nvidia-device-plugin.yml above is curl'd from the release.
 COPY microshift/manifests/ /etc/microshift/manifests/
 
-# MicroShift's control plane, plus the device plugin image named by the manifest
-# (which uses "- image:" list form, hence the field scan).
+# Kept in the image so the smoke test can ask the same question the build did.
+COPY --chmod=0555 microshift/manifest-images.sh \
+      /opt/microshift/manifest-images.sh
+
+# release-info lists the control plane only; the device plugin's image and Argo
+# CD's are named nowhere but in the manifests that deploy them. The paths are
+# the ones MicroShift renders at start-up. && and the exit in the loop: a `;`
+# chain takes the last command's status, hiding a copy that failed earlier.
 RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
-    images="$(jq -r '.images[]' /usr/share/microshift/release/release-"$(uname -m)".json)" ; \
-    images="${images} $(awk '{for(i=1;i<NF;i++) if($i=="image:"){gsub(/"/,"",$(i+1)); print $(i+1)}}' \
-        /etc/microshift/manifests/nvidia-device-plugin.yml | sort -u)" ; \
+    images="$(jq -r '.images[]' /usr/share/microshift/release/release-"$(uname -m)".json)" && \
+    images="${images} $(/opt/microshift/manifest-images.sh \
+        /usr/lib/microshift/manifests /usr/lib/microshift/manifests.d/*/ \
+        /etc/microshift/manifests /etc/microshift/manifests.d/*/)" && \
     for img in ${images} ; do \
         /opt/physically-bound-images/embed_image.sh "${img}" \
-            --authfile /run/secrets/pull-secret.json ; \
+            --authfile /run/secrets/pull-secret.json || exit 1 ; \
     done
 
 RUN bootc container lint

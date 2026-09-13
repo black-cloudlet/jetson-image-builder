@@ -21,8 +21,9 @@ flashing station ever reaches the internet.
 Target stack on the device:
 
 - RHEL 9.8 image mode (bootc), aarch64
-- Kubernetes: **MicroShift 4.20** is the primary variant; **k3s** is being prepared beside it as a
-  second variant, not as a replacement
+- Kubernetes: **MicroShift 4.20** is the primary variant; **k3s** is prepared beside it as a
+  second variant, not as a replacement, and is **on hold** — the files stay, its workflow builds
+  only on manual dispatch (see below)
 - App services on the cluster: PostgreSQL, RabbitMQ
 - Inference: KServe serving the image-recognition model
 - All container images physically bound into the OS image (zero network at first boot)
@@ -127,7 +128,8 @@ Target stack on the device:
    and so there is a stable internal name to mirror into the air-gapped registry. `apps/`
    builds `FROM` it with the physically-bound-images machinery and the application images every
    variant needs. `microshift/` builds `FROM` that and adds MicroShift, the device plugin and
-   their images. `k3s/` sits beside `microshift/` and reuses `base` and `apps` untouched.
+   their images. `k3s/` sits beside `microshift/` and reuses `base` and `apps` untouched; it is
+   on hold and does not build automatically.
    The split is about rebuild cost: a variant layer pulls a whole control plane (MicroShift's is
    nine images) and that should not be redone whenever an application image or a model changes.
    Each layer is pushed separately as
@@ -199,6 +201,11 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   A patch that stops matching is a silent no-op in kustomize, so the smoke test runs
   `oc kustomize` and checks the render for both the added fields and the upstream ones it
   must not have replaced.
+  Plus `microshift-gitops` — core Argo CD, no web console, as manifests under
+  `/usr/lib/microshift/manifests.d/`. It comes from the **OpenShift GitOps channel**
+  (`gitops-<GITOPS_VER>-for-rhel-9-aarch64-rpms`, default `1.19`), a third
+  `--enablerepo` on the same `dnf install`, so the subscription needs that entitlement
+  too. Argo CD wants ~250 MB beyond MicroShift's own footprint.
   Images are copied into the main store rather than referenced as an additional store, because
   an image upgrade overwrites an additional store (RHEL-75827). **No `dnf upgrade`**: Red Hat's
   own file runs one, but here it could pull a kernel past 5.14.0-687.42.1 and the Tegra kmod is
@@ -206,6 +213,11 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   does not depend on dnf-plugins-core being in the base. No Containerfile heredocs — everything
   is `printf` or `COPY`, so the build does not depend on the builder's podman being new enough
   to parse `RUN <<EOF`.
+- `microshift/manifest-images.sh` — prints every image referenced by the MicroShift
+  manifest roots it is given, rendering each with `oc kustomize`. `release-<arch>.json`
+  lists the control plane only; the device plugin's image and Argo CD's are named
+  nowhere but in the manifests that deploy them, and an `images:` transformer defeats a
+  grep. The build embeds what it prints; the smoke test re-runs it against the cache.
 - `physically-bound-images/{embed_image.sh,copy_embedded_images.sh}` — adapted from
   `redhat-et/edge-ai-image-pipelines` (Apache-2.0). Cache is `/usr/lib/containers-image-cache`
   with a `mapping.txt` of reference -> sha, replayed once per boot by
@@ -248,9 +260,14 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   `JETSON_ORIN_K3S`, distinct from the microshift ISO's — anaconda finds its stage2 by label, and
   two variants sharing one would pick whichever stick enumerated first.
 - `.github/workflows/build-k3s.yml` — the microshift caller with the top two jobs repointed;
-  `base` and `apps` are identical. A change under `base/` or `apps/` triggers both callers, so
-  those two layers are built and pushed once per variant. Accepted: the alternative is one
-  workflow fanning out, which couples the variants' release cadence.
+  `base` and `apps` are identical. **On hold: `workflow_dispatch` only, no `push:` trigger.**
+  The variant is unvalidated on hardware, and `base/**` and `apps/**` matched both callers, so
+  every change below the control plane rebuilt and re-pushed those two layers a second time and
+  then pulled a whole k3s control plane nobody is booting yet. Nothing is deleted: a manual
+  dispatch still builds base → apps → k3s → ISO, and copying the `push:` block back from
+  `build-microshift.yml` (with `k3s/**` in its paths) re-enables automatic builds — and with them
+  the duplicate base/apps build, which was accepted because the alternative is one workflow
+  fanning out, coupling the variants' release cadence.
 - `microshift/config.toml` — bib config with a **custom kickstart** (bib then adds only `ostreecontainer`;
   `[customizations.user]`/`filesystem` cannot be combined with a custom kickstart, so
   everything lives in the kickstart): `text --non-interactive`, `timezone Asia/Jerusalem --utc`,
@@ -281,7 +298,9 @@ Secrets: `RH_REGISTRY_USER`, `RH_REGISTRY_PASSWORD` (bib image pull), `RHSM_USER
 (both jobs `subscription-manager register` inside the UBI builder, and unregister in an
 `if: always()` step), `OPENSHIFT_PULL_SECRET` (pulls MicroShift's and the device plugin's
 container images at build time; never written into the OS image), `JETSON_SSH_PUBKEY`,
-`JETSON_PASSWORD_HASH` (`openssl passwd -6`). The entitlement-certificate tarball
+`JETSON_PASSWORD_HASH` (`openssl passwd -6`). The subscription must carry an
+OpenShift GitOps entitlement as well as an OpenShift one, or `microshift-gitops` is
+unreachable and the microshift layer fails. The entitlement-certificate tarball
 (`RHSM_ENTITLEMENT_TGZ_B64`) was replaced by registration: nothing expires inside a secret and
 `redhat.repo` is generated fresh by the registration. Cost is a register/unregister cycle per
 job — four per run — and the build stops if the credentials are wrong.
@@ -315,10 +334,13 @@ hardware as of this writing.
    `nvidia.com/gpu` in the node's allocatable resources — with time slicing that should read
    the ConfigMap's replica count, not 1. Then schedule that many GPU pods at once and watch
    for the OOM that says the count is above what the SOM's RAM can hold.
+   Confirm GitOps in the same pass: `oc get pods -n openshift-gitops` running with no
+   registry reachable, and `argocd` CLI access if the RPM ships one.
 4. Add the bound app images (PostgreSQL, RabbitMQ, KServe, the model server) through
    `embed_image.sh`, and their manifests to `/etc/microshift/manifests/kustomization.yaml`.
 5. Verify a GPU pod schedules and KServe answers an inference request with no network attached.
-6. k3s variant, unvalidated on hardware and behind the microshift one: confirm `k3s.service`
+6. k3s variant, **on hold** — unvalidated on hardware and behind the microshift one. When it is
+   picked back up (restore the `push:` trigger in `build-k3s.yml` first): confirm `k3s.service`
    comes up enforcing, that `k3s-stage-assets.service` staged the images before it, that
    `k3s ctr images ls` shows the airgap set and the device plugin with no registry reachable, and
    that a GPU pod schedules through the default `nvidia` runtime.
