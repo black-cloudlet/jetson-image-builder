@@ -194,13 +194,9 @@ without standing up a self-hosted machine. Both the split and the UBI-builder pa
 [redhat-et/edge-ai-image-pipelines](https://github.com/redhat-et/edge-ai-image-pipelines).
 
 The host's `/mnt` is bind-mounted into the job container as `/scratch`, and `/var/lib/containers`,
-`/var/tmp` and the ISO output directory are bound onto it. Partly for space — roughly 10 GB of
-embedded container images plus a multi-gigabyte ISO does not fit in the container's default
-writable layer — but mainly because that writable layer is Docker's overlayfs, which the kernel
-will not accept as an overlay upperdir: left there, podman falls back to `fuse-overlayfs` and
-every layer commit walks the whole rootfs, about two minutes per Containerfile instruction. On
-`/scratch` podman gets native overlay; the step checks `podman info` for
-`Native Overlay Diff:true` and fails otherwise.
+`/var/tmp` and the ISO output directory are bound onto it: partly for space, mainly because the
+container's own writable layer is overlayfs, on which podman falls back to `fuse-overlayfs` and
+every layer commit takes about two minutes. The step fails unless podman reports native overlay.
 
 ## Storage layout
 

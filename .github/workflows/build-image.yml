@@ -74,13 +74,9 @@ jobs:
           RHSM_PASSWORD: ${{ secrets.RHSM_PASSWORD }}
         run: subscription-manager register --username="$RHSM_USERNAME" --password="$RHSM_PASSWORD"
 
-      # podman needs its storage on a real filesystem. The job container's / is
-      # Docker's overlayfs, which the kernel refuses as an overlay upperdir, so
-      # podman falls back to fuse-overlayfs, and with a mount program the
-      # storage library computes every layer diff by walking the whole rootfs:
-      # ~2 minutes per Containerfile instruction. /scratch is the runner's own
-      # disk (ext4), so binding it in gives native overlay. It is also the
-      # roomier disk on runners that have a separate one.
+      # The job container's / is overlayfs, unusable as an overlay upperdir, so
+      # podman would fall back to fuse-overlayfs and every layer commit would
+      # walk the whole rootfs. /scratch is the runner's ext4 disk.
       - name: Put container storage on the runner's disk
         run: |
           mkdir -p /scratch/containers /scratch/tmp /var/lib/containers /var/tmp
