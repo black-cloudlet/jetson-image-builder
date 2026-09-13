@@ -35,7 +35,47 @@ if [[ $image =~ .*:.*@sha256:.* ]]; then
 	dst=$repo:$tag
 fi
 
+# Take only the node's architecture: it is aarch64 and so is the builder
+# (build-image.yml requires a native runner), so every other platform in a
+# manifest list is dead weight. A tag-referenced image is where that bites —
+# the device plugin today, application images later, a docker.io manifest list
+# carrying six platforms.
+#
+# Except when the reference is a digest, which names one exact manifest: if that
+# manifest is a list, picking an architecture out of it would store the image
+# under a digest that is not its own, and the manifest asking for it by digest
+# would not find what it asked for. Those stay --multi-arch=all, which costs
+# nothing for MicroShift's release images — release-aarch64.json and
+# release-x86_64.json pin different digests, so those are single manifests
+# already — and keeps a list-pinned image from a rendered manifest intact.
+multi_arch=system
+if [[ $dst == *@sha256:* ]]; then
+	multi_arch=all
+fi
+
 mkdir -p "$CACHE_DIR"
-skopeo copy --multi-arch=all --preserve-digests "${additional_copy_args[@]}" \
+skopeo copy --multi-arch="$multi_arch" --preserve-digests "${additional_copy_args[@]}" \
 	"docker://$src" "dir:$CACHE_DIR/$fsha"
 echo "$dst,$fsha" >> "$CACHE_DIR/mapping.txt"
+
+# The dir: transport names each blob after its digest, so a layer this image
+# shares with one already embedded is the same file under another directory —
+# and images from one OpenShift release share their base layers. Hardlink rather
+# than keep a second copy.
+#
+# This buys nothing on the node: /usr is an ostree checkout, which stores by
+# content and hardlinks identical files whatever they are named. It is the layer
+# tar that carries the duplicates, so what shrinks is the pushed image, the ISO
+# and every upgrade download. Only blobs — manifest.json, version and
+# <digest>.manifest.json are per-image and share no name.
+for blob in "$CACHE_DIR/$fsha"/*; do
+	name=${blob##*/}
+	[[ $name =~ ^[0-9a-f]{64,}$ ]] || continue
+
+	for other in "$CACHE_DIR"/*/"$name"; do
+		if [[ -f $other && $other != "$blob" ]]; then
+			ln -f "$other" "$blob"
+			break
+		fi
+	done
+done

@@ -12,7 +12,9 @@ rpm -q nvidia-jetpack-for-rhel-9.8-kmod nvidia-container-toolkit-base
 ls /usr/lib/modules/*/extra/drivers/gpu/nvgpu/nvgpu.ko
 
 # skopeo is used by embed_image.sh at build time and by copy_embedded_images.sh
-# at boot; it comes from the vendor image rather than being installed.
+# at boot; podman by the latter, to drop a superseded image set. Both come from
+# the vendor image rather than being installed.
 command -v skopeo
+command -v podman
 
 echo "all checks passed"
