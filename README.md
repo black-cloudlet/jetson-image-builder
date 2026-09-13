@@ -84,8 +84,7 @@ empty one an account with no password at all — neither is visible until the IS
 Entitlement comes from registering inside the build container, not from a certificate tarball —
 nothing expires in a secret, and `redhat.repo` is generated fresh by the registration. Each run
 job registers and releases the slot again in an `if: always()` unregister step — every job,
-including the two that install no RPMs, because `xfsprogs` for the scratch disk is in the RHEL
-repos rather than UBI's. The
+including the two that install no RPMs, so that all layers share one code path. The
 subscription has to carry an OpenShift entitlement or `rhocp-4.20-for-rhel-9-aarch64-rpms` never
 appears and the build fails at `--enablerepo`.
 
@@ -194,10 +193,14 @@ entitlement. GitHub offers no RHEL-hosted runner, so this is the closest thing t
 without standing up a self-hosted machine. Both the split and the UBI-builder pattern follow
 [redhat-et/edge-ai-image-pipelines](https://github.com/redhat-et/edge-ai-image-pipelines).
 
-The runner's scratch disk (`/dev/nvme0n1`) is formatted and `/var/lib/containers`, `/var/tmp` and
-the ISO output directory are moved onto it. Roughly 10 GB of embedded container images plus a
-multi-gigabyte ISO does not fit in the container's default writable layer. If that device is
-already mounted the step warns and continues rather than reformatting something in use.
+The host's `/mnt` is bind-mounted into the job container as `/scratch`, and `/var/lib/containers`,
+`/var/tmp` and the ISO output directory are bound onto it. Partly for space — roughly 10 GB of
+embedded container images plus a multi-gigabyte ISO does not fit in the container's default
+writable layer — but mainly because that writable layer is Docker's overlayfs, which the kernel
+will not accept as an overlay upperdir: left there, podman falls back to `fuse-overlayfs` and
+every layer commit walks the whole rootfs, about two minutes per Containerfile instruction. On
+`/scratch` podman gets native overlay; the step checks `podman info` for
+`Native Overlay Diff:true` and fails otherwise.
 
 ## Storage layout
 

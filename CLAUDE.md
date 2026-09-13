@@ -114,15 +114,23 @@ Target stack on the device:
    `subscription-manager register` inside the container supplies entitlement. Images are pushed
    to GHCR, then mirrored into the air-gapped registry by hand. Pattern taken from
    `redhat-et/edge-ai-image-pipelines` (Apache-2.0), which builds Tegra bootc images the same
-   way. ~10 GB of embedded images plus a multi-gigabyte ISO does not fit in the job
-   container's writable layer, so the runner's ephemeral disk (`/mnt` on the host) is bind-mounted
-   into the job container as `/scratch` and `/var/lib/containers`, `/var/tmp` and the ISO output
-   are bound onto it. Each job compares free space on `/` (the writable layer, on the runner's OS
-   disk) with `/scratch` and keeps the larger, rather than assuming either: `ubuntu-24.04-arm` has
-   no `/dev/nvme0n1`, and the `mkfs.xfs /dev/nvme0n1` inherited from the reference repo failed
-   every run. `--device /dev/nvme0n1` in `container.options` did not catch it earlier because
-   under `--privileged` Docker replaces the device list with the host's whole `/dev` and silently
-   ignores a path that does not exist.
+   way. The host's `/mnt` is bind-mounted into the job container as `/scratch`, and
+   `/var/lib/containers`, `/var/tmp` and the ISO output are bound onto it **unconditionally**, for
+   two reasons. Space: ~10 GB of embedded images plus a multi-gigabyte ISO does not fit in the job
+   container's writable layer on runners that have a separate ephemeral disk. Filesystem type,
+   which matters even where `/mnt` is just a directory on the OS disk (as on `ubuntu-24.04-arm`):
+   the job container's `/` is Docker's overlayfs, the kernel refuses overlayfs as an overlay
+   upperdir, and podman then silently falls back to `fuse-overlayfs`. With a mount program the
+   storage library cannot use the upper directory as the layer diff and instead walks the whole
+   rootfs for every commit — measured at 90 s per instruction in `base/`, 125 s in `apps/` and
+   140 s in `microshift/`, i.e. ~20 of the microshift job's 24 build minutes. On `/scratch` (ext4)
+   podman gets native overlay. The step prints `podman info`'s graph status and fails if it does
+   not say `Native Overlay Diff:true`, so a regression is caught before any build minutes are
+   spent. Earlier versions formatted `/dev/nvme0n1` (inherited from the reference repo; the arm
+   runner has no such device, and `--device` in `container.options` did not catch it because
+   under `--privileged` Docker ignores a path that does not exist) and then bound `/scratch` only
+   when it had more free space than `/` — which on the arm runner it never does, so storage
+   stayed on overlayfs.
 7. **Three layers, one directory per Kubernetes variant.** `base/` republishes the pinned
    vendor image under our own name and adds nothing — it exists so the pin lives in one file
    and so there is a stable internal name to mirror into the air-gapped registry. `apps/`
@@ -251,8 +259,8 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   The static address and hostname are baked into the ISO: two devices imaged from the same ISO
   collide on one segment. `--nameserver` is deliberately absent — the network is air-gapped and
   there is no resolver to point at.
-- `.github/workflows/build-image.yml` — **reusable**: register, move container storage onto the
-  runner's ephemeral disk when that is the roomier one, write the
+- `.github/workflows/build-image.yml` — **reusable**: register, bind container storage onto the
+  runner's disk so podman gets native overlay, write the
   pull secret, build the given Containerfile with the repo root as context, run the given
   smoke-test inside the result, push `ghcr.io/<owner>/jetson-orin-bootc-<name>:<YYYYMMDD-sha8>`
   + `latest`, and output the ref pinned by digest (`podman push --digestfile`).
@@ -350,6 +358,9 @@ kubeconfig (`/etc/rancher/k3s/k3s.yaml`, root-only) should be opened to the `jet
   needed packages.
 - Every base-image bump is a potential GPU break because the kmod is tied to a kernel build. A
   container smoke test proves nothing about the GPU; boot on real hardware before promoting a tag.
+- podman inside a `container:` job silently runs on `fuse-overlayfs` unless its storage is on a
+  real filesystem, and then every layer commit walks the whole rootfs (minutes per instruction).
+  Keep `/var/lib/containers` bound onto `/scratch` and keep the `Native Overlay Diff:true` check.
 
 **Git / delivery.** Claude has no push access. Produce files; the maintainer copies them into the
 local checkout and pushes. Always state which files changed and give the `cp` + `git` commands.
