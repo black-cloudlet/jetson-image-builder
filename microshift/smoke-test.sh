@@ -31,10 +31,8 @@ echo "== microshift =="
 rpm -q microshift microshift-release-info openshift-clients microshift-gitops
 oc version --client
 
-# The GitOps RPM is only manifests; if it stopped shipping them, Argo CD would
-# silently never be deployed. Name what was found either way.
-# || true: a missing directory must reach the message below, not abort under
-# set -e with nothing said.
+# The RPM is only manifests; if it stopped shipping them, Argo CD would silently
+# never deploy. || true so a missing directory reaches the message, not set -e.
 gitops_roots=$(find /usr/lib/microshift/manifests.d -maxdepth 1 -mindepth 1 -type d \
 	-name '*gitops*' 2>/dev/null || true)
 if [[ -z $gitops_roots ]]; then
@@ -77,11 +75,9 @@ while IFS=, read -r img sha; do
 		|| { echo "missing embedded image: ${img}"; exit 1; }
 done < "$mapping"
 
-# The real question is not how many images were embedded but whether the ones
-# the manifests will ask for are among them — the device plugin's, Argo CD's,
-# and anything a later layer added. embed_image.sh keys the cache directory on
-# the sha256 of the reference it was handed, newline and all, so recompute it
-# the same way rather than matching on the mapping's rewritten name.
+# Whether the images the manifests will ask for are actually in the cache.
+# embed_image.sh names the directory after `echo "$ref" | sha256sum`, newline
+# and all, so recompute it rather than match the mapping's rewritten name.
 echo "== manifest images =="
 while read -r img; do
 	fsha="$(echo "$img" | sha256sum | awk '{ print $1 }')"

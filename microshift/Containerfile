@@ -10,11 +10,8 @@ FROM ${BASE_IMAGE}
 # the base.
 # openshift-clients is `oc`: the microshift RPM ships no client at all, and
 # without it the node cannot inspect its own cluster.
-# microshift-gitops is core Argo CD, no web console, shipped as a manifest set
-# under /usr/lib/microshift/manifests.d and applied on first start. It comes
-# from the OpenShift GitOps channel rather than rhocp, hence its own version
-# knob: 1.19 is a line supported against 4.20. All three channels are needed
-# here only; the deployed node never reaches a repository.
+# microshift-gitops is core Argo CD as manifests under
+# /usr/lib/microshift/manifests.d, from the GitOps channel rather than rhocp.
 ARG USHIFT_VER=4.20
 ARG GITOPS_VER=1.19
 RUN dnf install -y \
@@ -79,14 +76,10 @@ resources:\n\
 COPY --chmod=0555 microshift/manifest-images.sh \
       /opt/microshift/manifest-images.sh
 
-# MicroShift's control plane comes from release-info; everything else — the
-# device plugin, Argo CD — is named only by the manifests that deploy it, so
-# render those and take the images out of the result. Every path here is one
-# MicroShift itself renders at start-up.
-# && between the steps, and an explicit exit inside the loop: a `;` chain takes
-# the status of the last command only, so a skopeo copy that failed halfway
-# through the list would still build, and the node would find a mapping entry
-# with no cache directory behind it at first boot.
+# release-info lists the control plane only; the device plugin's image and Argo
+# CD's are named nowhere but in the manifests that deploy them. The paths are
+# the ones MicroShift renders at start-up. && and the exit in the loop: a `;`
+# chain takes the last command's status, hiding a copy that failed earlier.
 RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
     images="$(jq -r '.images[]' /usr/share/microshift/release/release-"$(uname -m)".json)" && \
     images="${images} $(/opt/microshift/manifest-images.sh \
