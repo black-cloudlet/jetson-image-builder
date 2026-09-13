@@ -1,6 +1,7 @@
-# base -> apps -> microshift -> ISO. Each layer builds on the previous one's
-# digest, so an app-image change does not re-pull MicroShift's control plane and
-# vice versa.
+# base -> bound-images -> microshift -> services -> ISO. Each layer builds on
+# the previous one's digest, so a change to a service image does not re-pull
+# MicroShift's control plane and vice versa. The ISO is built from the top of
+# the chain, which is services, not microshift.
 name: microshift image + installer ISO
 
 on:
@@ -8,16 +9,15 @@ on:
     branches: [main]
     paths:
       - base/**
-      - apps/**
       - microshift/**
-      - physically-bound-images/**
+      - services/**
       - .github/workflows/build-microshift.yml
       - .github/workflows/build-image.yml
       - .github/workflows/build-iso.yml
   workflow_dispatch:
 
 jobs:
-  # Republishes the pinned vendor image.
+  # The pinned vendor image, republished. Shared by every variant.
   base:
     uses: ./.github/workflows/build-image.yml
     with:
@@ -27,36 +27,54 @@ jobs:
     secrets: inherit
     permissions: { contents: read, packages: write }
 
-  # Embedding machinery and app images. Shared by every variant.
-  apps:
+  # The image-embedding machinery. Shared by every variant.
+  # Job id with an underscore, image name with a hyphen: needs.bound-images
+  # parses as a subtraction, so a dotted reference to a hyphenated id resolves
+  # to nothing instead of failing.
+  bound_images:
     needs: base
     uses: ./.github/workflows/build-image.yml
     with:
-      name: apps
-      containerfile: apps/Containerfile
-      smoke-test: apps/smoke-test.sh
+      name: bound-images
+      containerfile: base/Containerfile.bound-images
+      smoke-test: base/smoke-test.bound-images.sh
       build-args: BASE_IMAGE=${{ needs.base.outputs.image-ref }}
     secrets: inherit
     permissions: { contents: read, packages: write }
 
   microshift:
-    needs: apps
+    needs: bound_images
     uses: ./.github/workflows/build-image.yml
     with:
       name: microshift
       containerfile: microshift/Containerfile
       smoke-test: microshift/smoke-test.sh
-      build-args: BASE_IMAGE=${{ needs.apps.outputs.image-ref }}
+      build-args: BASE_IMAGE=${{ needs.bound_images.outputs.image-ref }}
     secrets: inherit
     permissions: { contents: read, packages: write }
 
-  iso:
+  # Application and model-serving images, on top of the cluster rather than
+  # under it. Empty until the first component lands.
+  services:
     needs: microshift
+    uses: ./.github/workflows/build-image.yml
+    with:
+      name: services
+      containerfile: services/Containerfile
+      smoke-test: services/smoke-test.sh
+      build-args: BASE_IMAGE=${{ needs.microshift.outputs.image-ref }}
+    secrets: inherit
+    permissions: { contents: read, packages: write }
+
+  # The ISO is still the microshift variant's: config.toml and the artifact name
+  # belong to the variant, the image installed is the top of its chain.
+  iso:
+    needs: services
     uses: ./.github/workflows/build-iso.yml
     with:
-      image-ref: ${{ needs.microshift.outputs.image-ref }}
+      image-ref: ${{ needs.services.outputs.image-ref }}
       config: microshift/config.toml
       name: microshift
-      tag: ${{ needs.microshift.outputs.tag }}
+      tag: ${{ needs.services.outputs.tag }}
     secrets: inherit
     permissions: { contents: read, packages: read }

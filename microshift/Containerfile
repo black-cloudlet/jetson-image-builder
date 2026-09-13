@@ -1,6 +1,7 @@
-# 3/3. MicroShift 4.20. The apps layer supplies embed_image.sh and
-# copy-embedded-images.service.
-ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-apps:latest
+# Layer 3, microshift variant. MicroShift 4.20. The bound-images layer supplies
+# embed_image.sh and copy-embedded-images.service; services/ stacks the
+# application and model-serving images on top.
+ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-bound-images:latest
 FROM ${BASE_IMAGE}
 
 # rhocp, fast-datapath and gitops are entitlement-gated: the build runs in a
@@ -46,7 +47,7 @@ ExecStart=/usr/bin/mount --make-rshared /\n\
 WantedBy=multi-user.target\n' > /usr/lib/systemd/system/microshift-make-rshared.service && \
     systemctl enable microshift-make-rshared.service
 
-# Do not start before the apps layer has replayed the embedded images.
+# Do not start before the embedded images have been replayed.
 RUN mkdir -p /usr/lib/systemd/system/microshift.service.d && \
     printf '[Unit]\n\
 Requires=copy-embedded-images.service\n\
