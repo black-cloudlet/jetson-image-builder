@@ -33,7 +33,11 @@ jobs:
     permissions: { contents: read, packages: read }
     container:
       image: registry.access.redhat.com/ubi9/ubi
-      options: --privileged --device /dev/nvme0n1
+      options: --privileged
+      # The runner's ephemeral disk: the embedded images plus a multi-gigabyte
+      # ISO do not fit in the job container's writable layer.
+      volumes:
+        - /mnt:/scratch
     env:
       ISO_NAME: jetson-orin-bootc-${{ inputs.name }}-${{ inputs.tag }}.iso
       SMDEV_CONTAINER_OFF: 1
@@ -55,19 +59,24 @@ jobs:
           RHSM_PASSWORD: ${{ secrets.RHSM_PASSWORD }}
         run: subscription-manager register --username="$RHSM_USERNAME" --password="$RHSM_PASSWORD"
 
+      # / is the job container's writable layer, on the runner's OS disk;
+      # /scratch is the runner's ephemeral disk. Use whichever has more room,
+      # rather than assuming either. If /mnt is a plain directory on the OS
+      # disk the two are equal and the binds are skipped.
       - name: Move container storage and ISO output onto the scratch disk
         run: |
-          if findmnt -S /dev/nvme0n1 >/dev/null 2>&1; then
-            echo "::warning::/dev/nvme0n1 already mounted; leaving it alone. The build may run out of space."
+          lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT || true
+          df -h / /scratch
+          root_free=$(df -kP / | awk 'NR==2 {print $4}')
+          scratch_free=$(df -kP /scratch | awk 'NR==2 {print $4}')
+          if [ "$scratch_free" -le "$root_free" ]; then
+            echo "::notice::/scratch has ${scratch_free}K free vs ${root_free}K on /; leaving storage on the OS disk."
             exit 0
           fi
-          dnf -y install xfsprogs
-          mkfs.xfs -f /dev/nvme0n1
-          mkdir -p /var/mnt && mount /dev/nvme0n1 /var/mnt
-          mkdir -p /var/mnt/containers /var/mnt/tmp /var/mnt/output /var/lib/containers /var/tmp output
-          mount --bind /var/mnt/containers /var/lib/containers
-          mount --bind /var/mnt/tmp /var/tmp
-          mount --bind /var/mnt/output output
+          mkdir -p /scratch/containers /scratch/tmp /scratch/output /var/lib/containers /var/tmp output
+          mount --bind /scratch/containers /var/lib/containers
+          mount --bind /scratch/tmp /var/tmp
+          mount --bind /scratch/output output
           df -h /var/lib/containers /var/tmp output
 
       - name: Logins

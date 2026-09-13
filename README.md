@@ -6,7 +6,8 @@ image mode (aarch64), for deployment into a disconnected environment.
 The device OS is Red Hat's JetPack-for-RHEL bootc image (RHEL 9.8, JetPack 6.2.2 / L4T r36.5.0,
 kernel 5.14.0-687.42.1). Each **variant** is a directory deriving from it and layering on a
 Kubernetes distribution, with every container image embedded so the cluster starts with no
-registry reachable. Today there is one variant, `microshift/`; `k3s/` is expected beside it.
+registry reachable. There are two variants, `microshift/` and `k3s/`, built from the same `base`
+and `apps` layers.
 
 Every layer is published as `ghcr.io/black-cloudlet/jetson-orin-bootc-<layer>:<YYYYMMDD-sha8>`,
 and the finished variant also uploads an installer ISO as a workflow artifact.
@@ -20,13 +21,15 @@ base   the pinned vendor image, republished under our own name
 apps   physically-bound-images machinery + APP_IMAGES
   |
 microshift   MicroShift 4.20 + NVIDIA device plugin + their images
+ or
+k3s          k3s + NVIDIA device plugin + their images
   |
 ISO
 ```
 
 Changing an application image rebuilds `apps` and above but not `base`; changing the MicroShift
-version rebuilds only the top layer and does not re-pull the application images. A future `k3s/`
-reuses `base` and `apps` untouched.
+version rebuilds only that variant's top layer and does not re-pull the application images. `k3s/`
+reuses `base` and `apps` untouched, so the two variants share everything below the control plane.
 
 | Path | Does |
 | ---- | ---- |
@@ -37,10 +40,15 @@ reuses `base` and `apps` untouched.
 | `microshift/Containerfile` | `FROM` apps + MicroShift 4.20 + NVIDIA device plugin + their images |
 | `microshift/config.toml` | bootc-image-builder config — the unattended kickstart and the ISO label |
 | `microshift/smoke-test.sh` | checks run inside the finished image before it is pushed |
+| `k3s/Containerfile` | `FROM` apps + k3s + NVIDIA device plugin + their images |
+| `k3s/stage-assets.sh` | copies the baked-in images and manifests under `/var/lib/rancher` at boot |
+| `k3s/config.toml` | bootc-image-builder config — kickstart and ISO label for the k3s variant |
+| `k3s/smoke-test.sh` | checks run inside the finished image before it is pushed |
 | `physically-bound-images/` | shared scripts: embed at build time, replay into containers-storage at boot |
 | `.github/workflows/build-image.yml` | reusable — builds and pushes one layer |
 | `.github/workflows/build-iso.yml` | reusable — turns a pushed image into an installer ISO |
 | `.github/workflows/build-microshift.yml` | caller — chains base → apps → microshift → ISO |
+| `.github/workflows/build-k3s.yml` | caller — chains base → apps → k3s → ISO |
 
 ## Adding a variant
 
@@ -49,9 +57,9 @@ Create `<name>/` with a `Containerfile` (`FROM` the apps layer via an `ARG BASE_
 `iso` job at the new directory. The `base` and `apps` jobs are reused unchanged.
 
 Nothing in the reusable workflows is MicroShift-specific: layer-shaped checks live in each
-layer's own `smoke-test.sh`, and the kickstart in the variant's own `config.toml` (MicroShift's
-leaves free extents for LVMS; k3s, whose local-path provisioner just uses a directory, would not
-need to).
+layer's own `smoke-test.sh`, and the kickstart in the variant's own `config.toml` — MicroShift's
+leaves free extents for LVMS, while the k3s one grows root over the whole VG because local-path
+provisions out of a directory on the root filesystem.
 
 Provisioning the flashing station and flashing the Jetson QSPI are a separate concern and live in
 **[black-cloudlet/jetson-installer-config](https://github.com/black-cloudlet/jetson-installer-config)**

@@ -1,0 +1,66 @@
+# base -> apps -> k3s -> ISO. The k3s variant of build-microshift.yml: it reuses
+# base and apps untouched, so only the last two jobs differ.
+#
+# base/** and apps/** trigger this and the microshift caller alike, so a change
+# there rebuilds and re-pushes those two layers once per variant. Left as is:
+# the alternative is one workflow that fans out, which couples the variants'
+# release cadence for the sake of a few minutes of runner time.
+name: k3s image + installer ISO
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - base/**
+      - apps/**
+      - k3s/**
+      - physically-bound-images/**
+      - .github/workflows/build-k3s.yml
+      - .github/workflows/build-image.yml
+      - .github/workflows/build-iso.yml
+  workflow_dispatch:
+
+jobs:
+  # Republishes the pinned vendor image.
+  base:
+    uses: ./.github/workflows/build-image.yml
+    with:
+      name: base
+      containerfile: base/Containerfile
+      smoke-test: base/smoke-test.sh
+    secrets: inherit
+    permissions: { contents: read, packages: write }
+
+  # Embedding machinery and app images. Shared by every variant.
+  apps:
+    needs: base
+    uses: ./.github/workflows/build-image.yml
+    with:
+      name: apps
+      containerfile: apps/Containerfile
+      smoke-test: apps/smoke-test.sh
+      build-args: BASE_IMAGE=${{ needs.base.outputs.image-ref }}
+    secrets: inherit
+    permissions: { contents: read, packages: write }
+
+  k3s:
+    needs: apps
+    uses: ./.github/workflows/build-image.yml
+    with:
+      name: k3s
+      containerfile: k3s/Containerfile
+      smoke-test: k3s/smoke-test.sh
+      build-args: BASE_IMAGE=${{ needs.apps.outputs.image-ref }}
+    secrets: inherit
+    permissions: { contents: read, packages: write }
+
+  iso:
+    needs: k3s
+    uses: ./.github/workflows/build-iso.yml
+    with:
+      image-ref: ${{ needs.k3s.outputs.image-ref }}
+      config: k3s/config.toml
+      name: k3s
+      tag: ${{ needs.k3s.outputs.tag }}
+    secrets: inherit
+    permissions: { contents: read, packages: read }

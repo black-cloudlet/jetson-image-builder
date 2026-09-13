@@ -1,0 +1,133 @@
+# 3/3, k3s variant. Sits beside microshift/ and consumes the same apps layer, so
+# a change to an application image does not rebuild either control plane.
+#
+# k3s comes from its GitHub release, pinned by tag: the binary and the air-gap
+# image tarball are published there together and move as one, whereas Rancher's
+# RPM repo is a rolling channel. That repo is still used for one thing — the
+# SELinux policy, which is not something to hand-roll.
+ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-apps:latest
+FROM ${BASE_IMAGE}
+
+# The image is aarch64-only, so the release asset suffix is fixed. `+` has to be
+# percent-encoded or GitHub's redirect drops the release.
+ARG K3S_VERSION=v1.36.4+k3s1
+ARG K3S_RELEASE=https://github.com/k3s-io/k3s/releases/download
+
+# /usr/local is machine state on bootc, so the binary goes in /usr/bin. kubectl,
+# crictl and ctr are argv[0] dispatch into the same binary, as the upstream
+# installer does — without them the node cannot inspect its own cluster.
+RUN url_ver="$(printf '%s' "${K3S_VERSION}" | sed 's/+/%2B/')" && \
+    curl -fsSL -o /usr/bin/k3s "${K3S_RELEASE}/${url_ver}/k3s-arm64" && \
+    chmod 0755 /usr/bin/k3s && \
+    for cmd in kubectl crictl ctr ; do ln -sf k3s "/usr/bin/${cmd}" ; done
+
+# Without k3s-selinux the policy has no types for /var/lib/rancher and the
+# cluster does not come up on an enforcing node. Only the policy comes from
+# Rancher; the repo file is removed again because the deployed node is
+# air-gapped and can never reach it. gpgcheck stays on: dnf imports the key at
+# install time.
+RUN printf '[rancher-k3s-common-stable]\n\
+name=Rancher K3s Common (stable)\n\
+baseurl=https://rpm.rancher.io/k3s/stable/common/centos/9/noarch\n\
+enabled=1\n\
+gpgcheck=1\n\
+repo_gpgcheck=0\n\
+gpgkey=https://rpm.rancher.io/public.key\n' > /etc/yum.repos.d/rancher-k3s-common.repo && \
+    dnf install -y container-selinux k3s-selinux firewalld && \
+    rm -f /etc/yum.repos.d/rancher-k3s-common.repo && \
+    dnf clean all
+
+# Same rules as the microshift layer: k3s defaults to the same pod and service
+# CIDRs. 6443 is the API, 443 the traefik ingress. Traefik also binds 80; it is
+# left closed because the inference API is served over HTTPS.
+RUN firewall-offline-cmd --zone=trusted --add-source=10.42.0.0/16 && \
+    firewall-offline-cmd --zone=trusted --add-source=10.43.0.0/16 && \
+    firewall-offline-cmd --zone=public --add-port=22/tcp && \
+    firewall-offline-cmd --zone=public --add-port=443/tcp && \
+    firewall-offline-cmd --zone=public --add-port=6443/tcp
+
+# k3s finds nvidia-container-runtime in $PATH and adds an "nvidia" runtime to
+# the containerd config it generates, but a pod only gets it through a
+# RuntimeClass. Making it the default is the same choice the microshift layer
+# makes with `nvidia-ctk runtime configure --set-as-default`, and it keeps the
+# stock device-plugin manifest usable unmodified. k3s owns its containerd
+# config, so there is nothing for nvidia-ctk to configure here.
+RUN mkdir -p /etc/rancher/k3s && \
+    printf 'default-runtime: nvidia\n' > /etc/rancher/k3s/config.yaml
+
+# The control plane's images. k3s imports any tarball it finds in the agent
+# images directory; zstd is the smallest of the three the release publishes and
+# k3s decompresses it itself.
+RUN mkdir -p /usr/share/k3s/agent-images && \
+    url_ver="$(printf '%s' "${K3S_VERSION}" | sed 's/+/%2B/')" && \
+    curl -fsSL -o /usr/share/k3s/agent-images/k3s-airgap-images.tar.zst \
+      "${K3S_RELEASE}/${url_ver}/k3s-airgap-images-arm64.tar.zst"
+
+# k3s auto-deploys plain YAML from the server manifests directory; it does not
+# run kustomize, so there is no kustomization.yaml as there is under microshift.
+ARG NVIDIA_DEVICE_PLUGIN_VER=v0.17.1
+RUN mkdir -p /usr/share/k3s/manifests && \
+    curl -fsSL -o /usr/share/k3s/manifests/nvidia-device-plugin.yaml \
+      "https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/${NVIDIA_DEVICE_PLUGIN_VER}/deployments/static/nvidia-device-plugin.yml"
+
+# The plugin image, named by the manifest ("- image:" list form, hence the field
+# scan). k3s's containerd cannot read the podman store that the apps layer's
+# embed_image.sh writes to, so the image is staged as a docker-archive tarball
+# beside the control plane's instead. No --preserve-digests: docker-archive
+# cannot hold an OCI manifest, and the manifest pins by tag anyway.
+#
+# APP_IMAGES from the apps layer land in that podman store and are therefore
+# still invisible to k3s. Converting them needs a second copy of every layer in
+# /usr, so it is a decision for when the first application image lands.
+RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
+    img="$(awk '{for(i=1;i<NF;i++) if($i=="image:"){gsub(/"/,"",$(i+1)); print $(i+1)}}' \
+        /usr/share/k3s/manifests/nvidia-device-plugin.yaml | sort -u | head -n 1)" ; \
+    skopeo copy --authfile /run/secrets/pull-secret.json \
+      "docker://${img}" \
+      "docker-archive:/usr/share/k3s/agent-images/nvidia-device-plugin.tar:${img}"
+
+# /var is machine state, so neither directory exists in the image. Staged once
+# per boot rather than by tmpfiles, so an image upgrade actually replaces what
+# is there.
+COPY --chmod=0555 k3s/stage-assets.sh /usr/libexec/k3s-stage-assets
+
+RUN printf '[Unit]\n\
+Description=Stage the baked-in k3s images and manifests under /var/lib/rancher\n\
+After=local-fs.target\n\
+Before=k3s.service\n\
+[Service]\n\
+Type=oneshot\n\
+ExecStart=/usr/libexec/k3s-stage-assets\n\
+RemainAfterExit=yes\n\
+[Install]\n\
+WantedBy=multi-user.target\n' > /usr/lib/systemd/system/k3s-stage-assets.service && \
+    systemctl enable k3s-stage-assets.service
+
+# Upstream's unit, minus the nm-cloud-setup guard (nothing installs it here) and
+# with BIN_DIR pointing at /usr/bin. Flags live in /etc/rancher/k3s/config.yaml,
+# not in the ExecStart, so a change does not mean editing a unit in /usr.
+RUN printf '[Unit]\n\
+Description=Lightweight Kubernetes\n\
+Documentation=https://k3s.io\n\
+Wants=network-online.target\n\
+Requires=k3s-stage-assets.service\n\
+After=network-online.target k3s-stage-assets.service\n\
+[Service]\n\
+Type=notify\n\
+KillMode=process\n\
+Delegate=yes\n\
+LimitNOFILE=1048576\n\
+LimitNPROC=infinity\n\
+LimitCORE=infinity\n\
+TasksMax=infinity\n\
+TimeoutStartSec=0\n\
+Restart=always\n\
+RestartSec=5s\n\
+ExecStartPre=-/sbin/modprobe br_netfilter\n\
+ExecStartPre=-/sbin/modprobe overlay\n\
+ExecStart=/usr/bin/k3s server\n\
+[Install]\n\
+WantedBy=multi-user.target\n' > /usr/lib/systemd/system/k3s.service && \
+    systemctl enable k3s.service
+
+RUN bootc container lint

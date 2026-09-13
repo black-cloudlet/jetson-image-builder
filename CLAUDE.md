@@ -21,7 +21,8 @@ flashing station ever reaches the internet.
 Target stack on the device:
 
 - RHEL 9.8 image mode (bootc), aarch64
-- Kubernetes: **MicroShift 4.20** (decided; k3s was the alternative and was dropped)
+- Kubernetes: **MicroShift 4.20** is the primary variant; **k3s** is being prepared beside it as a
+  second variant, not as a replacement
 - App services on the cluster: PostgreSQL, RabbitMQ
 - Inference: KServe serving the image-recognition model
 - All container images physically bound into the OS image (zero network at first boot)
@@ -113,24 +114,30 @@ Target stack on the device:
    `subscription-manager register` inside the container supplies entitlement. Images are pushed
    to GHCR, then mirrored into the air-gapped registry by hand. Pattern taken from
    `redhat-et/edge-ai-image-pipelines` (Apache-2.0), which builds Tegra bootc images the same
-   way. The runner's `/dev/nvme0n1` scratch disk is formatted and `/var/lib/containers`,
-   `/var/tmp` and the ISO output are moved onto it — ~10 GB of embedded images plus a
-   multi-gigabyte ISO does not fit in the job container's writable layer.
+   way. ~10 GB of embedded images plus a multi-gigabyte ISO does not fit in the job
+   container's writable layer, so the runner's ephemeral disk (`/mnt` on the host) is bind-mounted
+   into the job container as `/scratch` and `/var/lib/containers`, `/var/tmp` and the ISO output
+   are bound onto it. Each job compares free space on `/` (the writable layer, on the runner's OS
+   disk) with `/scratch` and keeps the larger, rather than assuming either: `ubuntu-24.04-arm` has
+   no `/dev/nvme0n1`, and the `mkfs.xfs /dev/nvme0n1` inherited from the reference repo failed
+   every run. `--device /dev/nvme0n1` in `container.options` did not catch it earlier because
+   under `--privileged` Docker replaces the device list with the host's whole `/dev` and silently
+   ignores a path that does not exist.
 7. **Three layers, one directory per Kubernetes variant.** `base/` republishes the pinned
    vendor image under our own name and adds nothing — it exists so the pin lives in one file
    and so there is a stable internal name to mirror into the air-gapped registry. `apps/`
    builds `FROM` it with the physically-bound-images machinery and the application images every
    variant needs. `microshift/` builds `FROM` that and adds MicroShift, the device plugin and
-   their images. `k3s/` is expected beside `microshift/`, reusing `base` and `apps` untouched.
+   their images. `k3s/` sits beside `microshift/` and reuses `base` and `apps` untouched.
    The split is about rebuild cost: a variant layer pulls a whole control plane (MicroShift's is
    nine images) and that should not be redone whenever an application image or a model changes.
    Each layer is pushed separately as
    `jetson-orin-bootc-<name>` and the next builds on its **digest**, not its tag. CI is two
    reusable workflows — `build-image.yml` (one layer) and `build-iso.yml` — plus a caller per
    variant chaining base → variant → ISO. Shared tooling (`physically-bound-images/`) stays at
-   the root and the build context is the repository root so any layer can `COPY` it. A layer
-   layer registers with subscription-manager, including the two that install no RPMs: `xfsprogs`
-   for the runner's scratch disk lives in the RHEL repos, not UBI's. Layout and the
+   the root and the build context is the repository root so any layer can `COPY` it. Every
+   layer registers with subscription-manager, including the two that install no RPMs: one code
+   path for every layer beats a per-layer entitlement flag. Layout and the
    reusable-workflow split follow
    `redhat-et/edge-ai-image-pipelines`, whose `Containerfile.podman` is the same idea as our
    `base/`.
@@ -196,6 +203,41 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   not handle. The unit deliberately does **not** want `network-online.target`: the copy is
   local-disk only and waiting for a carrier that never comes would add
   NetworkManager-wait-online's timeout to every boot.
+- `k3s/Containerfile` — `FROM` the apps layer via `ARG BASE_IMAGE`, then k3s (pinned
+  `K3S_VERSION`, default `v1.36.4+k3s1`) as the `k3s-arm64` static binary into `/usr/bin/k3s`
+  with the usual `kubectl`/`crictl`/`ctr` argv[0] symlinks — `/usr/local` is machine state on
+  bootc, so upstream's install script and its `/usr/local/bin` default are not usable. Only
+  `k3s-selinux` comes from Rancher's RPM repo (`rpm.rancher.io/k3s/stable/common/centos/9/noarch`,
+  `gpgcheck=1`); without it there are no SELinux types for `/var/lib/rancher` and the cluster does
+  not come up enforcing, and the repo file is deleted again in the same layer because the deployed
+  node can never reach it. Firewall rules match the microshift layer (k3s defaults to the same pod
+  and service CIDRs); traefik's port 80 is deliberately left closed. GPU integration is
+  `default-runtime: nvidia` in `/etc/rancher/k3s/config.yaml` rather than
+  `nvidia-ctk runtime configure`: k3s generates its own containerd config, finds
+  `nvidia-container-runtime` in `$PATH` and adds an `nvidia` runtime, but a pod only reaches it
+  through a RuntimeClass unless it is the default — the same choice `--set-as-default` makes under
+  CRI-O, and it keeps the stock device-plugin manifest usable unmodified. Images are the release's
+  `k3s-airgap-images-arm64.tar.zst` plus the device plugin as a `docker-archive` tarball, both in
+  `/usr/share/k3s/agent-images`; **the apps layer's `embed_image.sh` cache is useless here**,
+  because it writes into podman's containers-storage and k3s's containerd does not read it, so
+  `APP_IMAGES` will need a second staging path before the first application image lands.
+- `k3s/stage-assets.sh` + `k3s-stage-assets.service` — `/var` is machine state, so neither
+  `/var/lib/rancher/k3s/agent/images` nor `.../server/manifests` exists at first boot. The unit is
+  a oneshot ordered `Before=k3s.service` (and `Requires=`d by it) rather than `tmpfiles.d`, so an
+  image upgrade actually replaces what is staged. The images directory is a **symlink** into
+  `/usr/share/k3s/agent-images` — copying a ~1 GiB tarball onto the eMMC every boot would spend
+  space and write endurance duplicating something already on disk, and k3s only reads it. The
+  manifests directory has to be a real directory: k3s writes its own bundled coredns, traefik,
+  local-storage and metrics-server YAML into it.
+- `k3s/config.toml` — the microshift kickstart with one change: root **grows over the whole VG**
+  instead of stopping at 40 GiB. k3s provisions PVs from local-path, a directory on the root
+  filesystem, so free extents would be space the cluster cannot reach. ISO label
+  `JETSON_ORIN_K3S`, distinct from the microshift ISO's — anaconda finds its stage2 by label, and
+  two variants sharing one would pick whichever stick enumerated first.
+- `.github/workflows/build-k3s.yml` — the microshift caller with the top two jobs repointed;
+  `base` and `apps` are identical. A change under `base/` or `apps/` triggers both callers, so
+  those two layers are built and pushed once per variant. Accepted: the alternative is one
+  workflow fanning out, which couples the variants' release cadence.
 - `microshift/config.toml` — bib config with a **custom kickstart** (bib then adds only `ostreecontainer`;
   `[customizations.user]`/`filesystem` cannot be combined with a custom kickstart, so
   everything lives in the kickstart): `text --non-interactive`, `timezone Asia/Jerusalem --utc`,
@@ -210,7 +252,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   collide on one segment. `--nameserver` is deliberately absent — the network is air-gapped and
   there is no resolver to point at.
 - `.github/workflows/build-image.yml` — **reusable**: register, move container storage onto the
-  runner's scratch disk, write the
+  runner's ephemeral disk when that is the roomier one, write the
   pull secret, build the given Containerfile with the repo root as context, run the given
   smoke-test inside the result, push `ghcr.io/<owner>/jetson-orin-bootc-<name>:<YYYYMMDD-sha8>`
   + `latest`, and output the ref pinned by digest (`podman push --digestfile`).
@@ -261,14 +303,21 @@ hardware as of this writing.
 4. Add the bound app images (PostgreSQL, RabbitMQ, KServe, the model server) through
    `embed_image.sh`, and their manifests to `/etc/microshift/manifests/kustomization.yaml`.
 5. Verify a GPU pod schedules and KServe answers an inference request with no network attached.
-4. Later layers (separate Containerfiles `FROM` the k8s image, not this one): `bootc switch`
+6. k3s variant, unvalidated on hardware and behind the microshift one: confirm `k3s.service`
+   comes up enforcing, that `k3s-stage-assets.service` staged the images before it, that
+   `k3s ctr images ls` shows the airgap set and the device plugin with no registry reachable, and
+   that a GPU pod schedules through the default `nvidia` runtime.
+7. Later layers (separate Containerfiles `FROM` the k8s image, not this one): `bootc switch`
    unit pointing at the air-gapped registry, greenboot health checks, image signature policy in
    `/etc/containers/policy.json`.
 
 Open decisions to confirm with the maintainer before implementing: whether to keep the
 entitlement-secret approach or stand up a self-hosted RHEL runner; whether the static
 192.168.1.10 / hostname `Jetson` baked into the ISO becomes per-device before a second node
-joins the air-gapped network.
+joins the air-gapped network; how `APP_IMAGES` reach k3s's containerd, given that a second copy as
+`docker-archive` would put every application layer in `/usr` twice; and whether the k3s node's
+kubeconfig (`/etc/rancher/k3s/k3s.yaml`, root-only) should be opened to the `jetson` user the way
+`openshift-clients` opens the microshift one.
 
 ## How to work in this repo
 
@@ -334,4 +383,9 @@ cat /etc/nv_tegra_release      # R36 REVISION 5.0
 lsmod | grep nvgpu
 systemctl status nvidia-ctk && nvidia-ctk cdi list   # expect nvidia.com/gpu=all
 bootc status
+
+# On a k3s node
+systemctl status k3s-stage-assets k3s
+k3s ctr images ls | grep -c .        # airgap set + device plugin, imported with no registry
+k3s kubectl get nodes -o jsonpath='{.items[0].status.allocatable}'   # expect nvidia.com/gpu
 ```
