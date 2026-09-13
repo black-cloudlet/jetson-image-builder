@@ -67,10 +67,12 @@ jobs:
           mount --bind /scratch/tmp /var/tmp
           mount --bind /scratch/output output
           df -h /var/lib/containers
-          # RHEL's storage.conf mounts overlay with metacopy=on, which also
-          # forces the naive diff. Drop it before podman initialises storage.
-          sed -i '/^mountopt = /s/,\?metacopy=on//' /etc/containers/storage.conf
+          # RHEL's storage.conf mounts overlay with metacopy=on, and the runner
+          # kernel defaults redirect_dir on; either one makes the storage library
+          # refuse the native diff. Set the options before podman first runs.
+          sed -i '/^mountopt = /s/=.*/= "nodev,redirect_dir=off"/' /etc/containers/storage.conf
           grep -n '^mountopt' /etc/containers/storage.conf || true
+          grep -H . /sys/module/overlay/parameters/* || true
           podman info --format '{{.Store.GraphDriverName}} {{.Store.GraphStatus}}' | tee /tmp/graph
           grep -q 'Native Overlay Diff:true' /tmp/graph \
             || { echo "::error::podman is not on native overlay; layer commits will take minutes each"; exit 1; }
