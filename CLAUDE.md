@@ -184,7 +184,8 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   into `/usr/lib/containers-image-cache` with a `microshift.service.d` drop-in that orders them
   into containers-storage before the service starts (the unit itself lives in the apps layer;
   this one only orders against it), plus the NVIDIA device plugin
-  (`nvidia-ctk runtime configure --runtime=crio`, the plugin manifest and a kustomization in
+  (`nvidia-ctk runtime configure --runtime=crio` writing
+  `/etc/crio/crio.conf.d/99-nvidia.toml`, the plugin manifest and a kustomization in
   `/etc/microshift/manifests`, and the plugin image embedded alongside MicroShift's).
   Images are copied into the main store rather than referenced as an additional store, because
   an image upgrade overwrites an additional store (RHEL-75827). **No `dnf upgrade`**: Red Hat's
@@ -350,6 +351,12 @@ kubeconfig (`/etc/rancher/k3s/k3s.yaml`, root-only) should be opened to the `jet
   needed packages.
 - Every base-image bump is a potential GPU break because the kmod is tied to a kernel build. A
   container smoke test proves nothing about the GPU; boot on real hardware before promoting a tag.
+- `nvidia-ctk runtime configure --config=<dir>/99-nvidia.conf` writes `99-nvidia.toml` instead and
+  still exits 0 — the build cannot tell you it renamed the file. CRI-O walks `crio.conf.d` and
+  reads every file regardless of extension, so the drop-in works either way; only a check spelling
+  the name notices. Ask for the `.toml` path.
+- A bare `test` in a smoke test exits 1 with no output, so the log cannot say which path was
+  missing. Every check names what it looked for and lists the directory.
 
 **Git / delivery.** Claude has no push access. Produce files; the maintainer copies them into the
 local checkout and pushes. Always state which files changed and give the `cp` + `git` commands.
