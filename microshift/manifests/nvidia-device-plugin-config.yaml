@@ -1,0 +1,21 @@
+# The Orin has one iGPU, so without replicas exactly one pod can hold
+# nvidia.com/gpu and every other GPU workload waits for it. Replicas advertise
+# the same device N times and the driver interleaves the contexts; there is no
+# memory isolation between them, so N is a claim about what fits in the SOM's
+# RAM. 1 disables sharing — the plugin only replicates above 1.
+#
+# renameByDefault is left off, so the resource stays plain nvidia.com/gpu and
+# stock pod specs need no change.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvidia-device-plugin-config
+  namespace: kube-system
+data:
+  config.yaml: |
+    version: v1
+    sharing:
+      timeSlicing:
+        resources:
+          - name: nvidia.com/gpu
+            replicas: 4

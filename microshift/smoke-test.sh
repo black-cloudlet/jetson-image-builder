@@ -58,15 +58,12 @@ have -s /etc/microshift/manifests/nvidia-device-plugin-time-slicing.yaml \
 	/etc/microshift/manifests
 
 echo "== gpu time slicing =="
-# Render the manifests the way MicroShift will at first start. A patch that
-# stopped matching — a renamed container, a moved DaemonSet — is not an error in
-# kustomize, it is a no-op, and the node would come up sharing nothing. Checking
-# the rendered output is the only way to see the difference.
+# A patch that stops matching is a no-op in kustomize, not an error, and the
+# node would come up sharing nothing. Only the render shows the difference.
 rendered=$(oc kustomize /etc/microshift/manifests)
 
-# From the ConfigMap itself, not the render: a DaemonSet has no replicas today,
-# but a later manifest with a Deployment in it would make the first match in the
-# rendered stream somebody else's number.
+# From the ConfigMap, not the render: a Deployment added later would put its own
+# replicas first in the stream.
 replicas=$(sed -n 's/^ *replicas: \([0-9]*\) *$/\1/p' \
 	/etc/microshift/manifests/nvidia-device-plugin-config.yaml)
 [[ -n $replicas ]] || { echo "no replica count in the device plugin config"; exit 1; }
@@ -82,9 +79,8 @@ for want in \
 		|| { echo "patch did not apply, missing from rendered output: $want"; exit 1; }
 done
 
-# The patch is a strategic merge, so upstream's own fields must survive it. If
-# these went missing the merge replaced the lists instead of merging them, and
-# the plugin would lose its kubelet socket.
+# Upstream's own fields must survive the merge; missing means the lists were
+# replaced rather than merged, and the plugin loses its kubelet socket.
 for want in \
 	'name: FAIL_ON_INIT_ERROR' \
 	'mountPath: /var/lib/kubelet/device-plugins' \
