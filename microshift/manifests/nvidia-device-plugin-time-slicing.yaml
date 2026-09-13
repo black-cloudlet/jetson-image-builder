@@ -1,0 +1,24 @@
+# Kustomize merges containers by name, env by name, volumeMounts by mountPath
+# and volumes by name, so upstream's own fields survive.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin-daemonset
+  namespace: kube-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: nvidia-device-plugin-ctr
+          # The plugin's env var for --config-file. Env wins over the file, so
+          # nothing here may set a flag the config also sets.
+          env:
+            - name: CONFIG_FILE
+              value: /etc/nvidia-device-plugin/config.yaml
+          volumeMounts:
+            - name: device-plugin-config
+              mountPath: /etc/nvidia-device-plugin
+      volumes:
+        - name: device-plugin-config
+          configMap:
+            name: nvidia-device-plugin-config

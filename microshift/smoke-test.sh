@@ -65,6 +65,38 @@ echo "== nvidia device plugin =="
 have -s /etc/crio/crio.conf.d/99-nvidia.toml /etc/crio/crio.conf.d
 have -s /etc/microshift/manifests/nvidia-device-plugin.yml /etc/microshift/manifests
 have -s /etc/microshift/manifests/kustomization.yaml /etc/microshift/manifests
+have -s /etc/microshift/manifests/nvidia-device-plugin-config.yaml /etc/microshift/manifests
+have -s /etc/microshift/manifests/nvidia-device-plugin-time-slicing.yaml \
+	/etc/microshift/manifests
+
+echo "== gpu time slicing =="
+# A patch that stops matching is a no-op in kustomize, not an error.
+rendered=$(oc kustomize /etc/microshift/manifests)
+
+# From the ConfigMap: a Deployment added later would own the render's first one.
+replicas=$(sed -n 's/^ *replicas: \([0-9]*\) *$/\1/p' \
+	/etc/microshift/manifests/nvidia-device-plugin-config.yaml)
+[[ -n $replicas ]] || { echo "no replica count in the device plugin config"; exit 1; }
+echo "time-slicing replicas: $replicas"
+
+for want in \
+	'name: CONFIG_FILE' \
+	'value: /etc/nvidia-device-plugin/config.yaml' \
+	'mountPath: /etc/nvidia-device-plugin' \
+	'name: nvidia-device-plugin-config' \
+	; do
+	grep -qF -- "$want" <<<"$rendered" \
+		|| { echo "patch did not apply, missing from rendered output: $want"; exit 1; }
+done
+
+# Gone means the merge replaced the lists instead of merging them.
+for want in \
+	'name: FAIL_ON_INIT_ERROR' \
+	'mountPath: /var/lib/kubelet/device-plugins' \
+	; do
+	grep -qF -- "$want" <<<"$rendered" \
+		|| { echo "strategic merge clobbered upstream field: $want"; exit 1; }
+done
 
 echo "== embedded images =="
 mapping=/usr/lib/containers-image-cache/mapping.txt

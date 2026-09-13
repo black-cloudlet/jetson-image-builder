@@ -1,0 +1,8 @@
+# nvidia-device-plugin.yml is not in git: the Containerfile curls it in.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - nvidia-device-plugin.yml
+  - nvidia-device-plugin-config.yaml
+patches:
+  - path: nvidia-device-plugin-time-slicing.yaml

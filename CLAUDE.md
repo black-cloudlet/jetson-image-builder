@@ -188,7 +188,20 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   (`nvidia-ctk runtime configure --runtime=crio` writing
   `/etc/crio/crio.conf.d/99-nvidia.toml`, the plugin manifest and a kustomization in
   `/etc/microshift/manifests`, and the plugin image embedded alongside MicroShift's),
-  plus `microshift-gitops` — core Argo CD, no web console, as manifests under
+  configured for **GPU time slicing**. `microshift/manifests/` holds the kustomization, a
+  `nvidia-device-plugin-config` ConfigMap carrying
+  `sharing.timeSlicing.resources[nvidia.com/gpu].replicas` (4) and a strategic-merge patch
+  mounting it and setting `CONFIG_FILE`; the directory is `COPY`d over
+  `/etc/microshift/manifests` and only `nvidia-device-plugin.yml` is still curl'd, so the
+  upstream manifest is patched, never forked. The Orin has one iGPU, so without replicas
+  exactly one pod can hold `nvidia.com/gpu` and every other GPU workload waits for it. No
+  memory isolation between replicas, so the count is a claim about what fits in the SOM's
+  RAM — 32 GB on the POC module — and 1 disables sharing. `renameByDefault` stays off, so
+  the resource is plain `nvidia.com/gpu` and stock pod specs need no change.
+  A patch that stops matching is a silent no-op in kustomize, so the smoke test runs
+  `oc kustomize` and checks the render for both the added fields and the upstream ones it
+  must not have replaced.
+  Plus `microshift-gitops` — core Argo CD, no web console, as manifests under
   `/usr/lib/microshift/manifests.d/`. It comes from the **OpenShift GitOps channel**
   (`gitops-<GITOPS_VER>-for-rhel-9-aarch64-rpms`, default `1.19`), a third
   `--enablerepo` on the same `dnf install`, so the subscription needs that entitlement
@@ -318,7 +331,9 @@ hardware as of this writing.
    with no registry reachable (that is what the embedding buys), `vgs` showing free extents in
    VG `rhel`, and a PVC binding against the topolvm storage class.
 3. Confirm the device plugin: `oc get ds -n kube-system nvidia-device-plugin-daemonset` and
-   `nvidia.com/gpu` in the node's allocatable resources.
+   `nvidia.com/gpu` in the node's allocatable resources — with time slicing that should read
+   the ConfigMap's replica count, not 1. Then schedule that many GPU pods at once and watch
+   for the OOM that says the count is above what the SOM's RAM can hold.
    Confirm GitOps in the same pass: `oc get pods -n openshift-gitops` running with no
    registry reachable, and `argocd` CLI access if the RPM ships one.
 4. Add the bound app images (PostgreSQL, RabbitMQ, KServe, the model server) through

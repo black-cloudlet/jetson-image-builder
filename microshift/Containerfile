@@ -67,10 +67,9 @@ RUN mkdir -p /etc/microshift/manifests && \
     curl -fsSL -o /etc/microshift/manifests/nvidia-device-plugin.yml \
       "https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/${NVIDIA_DEVICE_PLUGIN_VER}/deployments/static/nvidia-device-plugin.yml"
 
-RUN printf 'apiVersion: kustomize.config.k8s.io/v1beta1\n\
-kind: Kustomization\n\
-resources:\n\
-  - nvidia-device-plugin.yml\n' > /etc/microshift/manifests/kustomization.yaml
+# Kustomization, time-slicing ConfigMap and the patch that mounts it. A patch,
+# not a fork: nvidia-device-plugin.yml above is curl'd from the release.
+COPY microshift/manifests/ /etc/microshift/manifests/
 
 # Kept in the image so the smoke test can ask the same question the build did.
 COPY --chmod=0555 microshift/manifest-images.sh \

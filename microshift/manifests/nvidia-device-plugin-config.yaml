@@ -1,0 +1,17 @@
+# One iGPU, so without replicas one pod holds nvidia.com/gpu and every other GPU
+# workload waits. No memory isolation between replicas, so the count is a claim
+# about what fits in the SOM's RAM; 1 disables sharing.
+# renameByDefault is left off, so the resource stays plain nvidia.com/gpu.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvidia-device-plugin-config
+  namespace: kube-system
+data:
+  config.yaml: |
+    version: v1
+    sharing:
+      timeSlicing:
+        resources:
+          - name: nvidia.com/gpu
+            replicas: 4
