@@ -13,7 +13,7 @@ ARG USHIFT_VER=4.20
 RUN dnf install -y \
         --enablerepo="rhocp-${USHIFT_VER}-for-rhel-9-$(uname -m)-rpms" \
         --enablerepo="fast-datapath-for-rhel-9-$(uname -m)-rpms" \
-        firewalld jq microshift microshift-release-info openshift-clients microshift-olm && \
+        firewalld jq microshift microshift-release-info openshift-clients && \
     systemctl enable microshift && \
     dnf clean all
 
