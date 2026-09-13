@@ -21,8 +21,9 @@ flashing station ever reaches the internet.
 Target stack on the device:
 
 - RHEL 9.8 image mode (bootc), aarch64
-- Kubernetes: **MicroShift 4.20** is the primary variant; **k3s** is being prepared beside it as a
-  second variant, not as a replacement
+- Kubernetes: **MicroShift 4.20** is the primary variant; **k3s** is prepared beside it as a
+  second variant, not as a replacement, and is **on hold** — the files stay, its workflow builds
+  only on manual dispatch (see below)
 - App services on the cluster: PostgreSQL, RabbitMQ
 - Inference: KServe serving the image-recognition model
 - All container images physically bound into the OS image (zero network at first boot)
@@ -127,7 +128,8 @@ Target stack on the device:
    and so there is a stable internal name to mirror into the air-gapped registry. `apps/`
    builds `FROM` it with the physically-bound-images machinery and the application images every
    variant needs. `microshift/` builds `FROM` that and adds MicroShift, the device plugin and
-   their images. `k3s/` sits beside `microshift/` and reuses `base` and `apps` untouched.
+   their images. `k3s/` sits beside `microshift/` and reuses `base` and `apps` untouched; it is
+   on hold and does not build automatically.
    The split is about rebuild cost: a variant layer pulls a whole control plane (MicroShift's is
    nine images) and that should not be redone whenever an application image or a model changes.
    Each layer is pushed separately as
@@ -235,9 +237,14 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   `JETSON_ORIN_K3S`, distinct from the microshift ISO's — anaconda finds its stage2 by label, and
   two variants sharing one would pick whichever stick enumerated first.
 - `.github/workflows/build-k3s.yml` — the microshift caller with the top two jobs repointed;
-  `base` and `apps` are identical. A change under `base/` or `apps/` triggers both callers, so
-  those two layers are built and pushed once per variant. Accepted: the alternative is one
-  workflow fanning out, which couples the variants' release cadence.
+  `base` and `apps` are identical. **On hold: `workflow_dispatch` only, no `push:` trigger.**
+  The variant is unvalidated on hardware, and `base/**` and `apps/**` matched both callers, so
+  every change below the control plane rebuilt and re-pushed those two layers a second time and
+  then pulled a whole k3s control plane nobody is booting yet. Nothing is deleted: a manual
+  dispatch still builds base → apps → k3s → ISO, and copying the `push:` block back from
+  `build-microshift.yml` (with `k3s/**` in its paths) re-enables automatic builds — and with them
+  the duplicate base/apps build, which was accepted because the alternative is one workflow
+  fanning out, coupling the variants' release cadence.
 - `microshift/config.toml` — bib config with a **custom kickstart** (bib then adds only `ostreecontainer`;
   `[customizations.user]`/`filesystem` cannot be combined with a custom kickstart, so
   everything lives in the kickstart): `text --non-interactive`, `timezone Asia/Jerusalem --utc`,
@@ -303,7 +310,8 @@ hardware as of this writing.
 4. Add the bound app images (PostgreSQL, RabbitMQ, KServe, the model server) through
    `embed_image.sh`, and their manifests to `/etc/microshift/manifests/kustomization.yaml`.
 5. Verify a GPU pod schedules and KServe answers an inference request with no network attached.
-6. k3s variant, unvalidated on hardware and behind the microshift one: confirm `k3s.service`
+6. k3s variant, **on hold** — unvalidated on hardware and behind the microshift one. When it is
+   picked back up (restore the `push:` trigger in `build-k3s.yml` first): confirm `k3s.service`
    comes up enforcing, that `k3s-stage-assets.service` staged the images before it, that
    `k3s ctr images ls` shows the airgap set and the device plugin with no registry reachable, and
    that a GPU pod schedules through the default `nvidia` runtime.
