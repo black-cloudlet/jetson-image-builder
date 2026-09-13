@@ -185,7 +185,14 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   this one only orders against it), plus the NVIDIA device plugin
   (`nvidia-ctk runtime configure --runtime=crio` writing
   `/etc/crio/crio.conf.d/99-nvidia.toml`, the plugin manifest and a kustomization in
-  `/etc/microshift/manifests`, and the plugin image embedded alongside MicroShift's).
+  `/etc/microshift/manifests`, and the plugin image embedded alongside MicroShift's),
+  plus `microshift-gitops` — core Argo CD, no web console, shipped as a manifest set
+  under `/usr/lib/microshift/manifests.d/` and deployed on first start. It comes from
+  the **OpenShift GitOps channel** (`gitops-<GITOPS_VER>-for-rhel-9-aarch64-rpms`,
+  default `1.18`, the line supported against 4.20), not from `rhocp`, so the
+  subscription needs that entitlement too; when the repo id is wrong the build prints
+  the `gitops-*` sections of `redhat.repo` rather than dnf's bare "Unknown repo".
+  Argo CD wants ~250 MB beyond MicroShift's own footprint.
   Images are copied into the main store rather than referenced as an additional store, because
   an image upgrade overwrites an additional store (RHEL-75827). **No `dnf upgrade`**: Red Hat's
   own file runs one, but here it could pull a kernel past 5.14.0-687.42.1 and the Tegra kmod is
@@ -193,6 +200,14 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   does not depend on dnf-plugins-core being in the base. No Containerfile heredocs — everything
   is `printf` or `COPY`, so the build does not depend on the builder's podman being new enough
   to parse `RUN <<EOF`.
+- `microshift/manifest-images.sh` — prints every image referenced by the MicroShift
+  manifest roots it is given, rendering each with `oc kustomize` where a
+  `kustomization.yaml` exists. Only the control plane is listed in
+  `release-<arch>.json`; the device plugin's image and Argo CD's are named nowhere but
+  in the manifests that deploy them, and an `images:` transformer means grepping the
+  files can name an image the cluster will never pull. The build embeds what it prints;
+  the smoke test re-runs it and fails if any of those images is missing from the cache,
+  which is the check that would have caught a GitOps RPM that moved its manifests.
 - `physically-bound-images/{embed_image.sh,copy_embedded_images.sh}` — adapted from
   `redhat-et/edge-ai-image-pipelines` (Apache-2.0). Cache is `/usr/lib/containers-image-cache`
   with a `mapping.txt` of reference -> sha, replayed once per boot by
@@ -268,7 +283,9 @@ Secrets: `RH_REGISTRY_USER`, `RH_REGISTRY_PASSWORD` (bib image pull), `RHSM_USER
 (both jobs `subscription-manager register` inside the UBI builder, and unregister in an
 `if: always()` step), `OPENSHIFT_PULL_SECRET` (pulls MicroShift's and the device plugin's
 container images at build time; never written into the OS image), `JETSON_SSH_PUBKEY`,
-`JETSON_PASSWORD_HASH` (`openssl passwd -6`). The entitlement-certificate tarball
+`JETSON_PASSWORD_HASH` (`openssl passwd -6`). The subscription must carry an
+OpenShift GitOps entitlement as well as an OpenShift one, or `microshift-gitops` is
+unreachable and the microshift layer fails. The entitlement-certificate tarball
 (`RHSM_ENTITLEMENT_TGZ_B64`) was replaced by registration: nothing expires inside a secret and
 `redhat.repo` is generated fresh by the registration. Cost is a register/unregister cycle per
 job — four per run — and the build stops if the credentials are wrong.
@@ -300,6 +317,8 @@ hardware as of this writing.
    VG `rhel`, and a PVC binding against the topolvm storage class.
 3. Confirm the device plugin: `oc get ds -n kube-system nvidia-device-plugin-daemonset` and
    `nvidia.com/gpu` in the node's allocatable resources.
+   Confirm GitOps in the same pass: `oc get pods -n openshift-gitops` running with no
+   registry reachable, and `argocd` CLI access if the RPM ships one.
 4. Add the bound app images (PostgreSQL, RabbitMQ, KServe, the model server) through
    `embed_image.sh`, and their manifests to `/etc/microshift/manifests/kustomization.yaml`.
 5. Verify a GPU pod schedules and KServe answers an inference request with no network attached.

@@ -17,6 +17,25 @@ RUN dnf install -y \
     systemctl enable microshift && \
     dnf clean all
 
+# The GitOps controller: core Argo CD as a MicroShift manifest set, no web
+# console. It ships from the OpenShift GitOps channel rather than rhocp, so the
+# version is its own knob — 1.18 is the line supported against 4.20. The channel
+# is only needed here; the deployed node never reaches a repository.
+# On failure, say which GitOps channels the entitlement actually carries: an
+# --enablerepo for a repo id that does not exist is otherwise a bare "Unknown
+# repo" with no hint of what to put in GITOPS_VER.
+ARG GITOPS_VER=1.18
+RUN repo="gitops-${GITOPS_VER}-for-rhel-9-$(uname -m)-rpms" ; \
+    dnf install -y \
+        --enablerepo="${repo}" \
+        --enablerepo="rhocp-${USHIFT_VER}-for-rhel-9-$(uname -m)-rpms" \
+        microshift-gitops \
+      || { echo "could not install microshift-gitops from ${repo}" ; \
+           echo "gitops channels in this entitlement:" ; \
+           grep -o '^\[gitops-[^]]*\]' /etc/yum.repos.d/redhat.repo || echo "  (none)" ; \
+           exit 1 ; } ; \
+    dnf clean all
+
 # Trusted: pod CIDR and the host-endpoint IP are mandatory; the ClusterIP
 # service CIDR is not, but pods reach CoreDNS and the API server through it.
 # Public: 6443 is the MicroShift API, 443 the router's HTTPS.
@@ -66,15 +85,26 @@ kind: Kustomization\n\
 resources:\n\
   - nvidia-device-plugin.yml\n' > /etc/microshift/manifests/kustomization.yaml
 
-# MicroShift's control plane, plus the device plugin image named by the manifest
-# (which uses "- image:" list form, hence the field scan).
+# Kept in the image so the smoke test can ask the same question the build did.
+COPY --chmod=0555 microshift/manifest-images.sh \
+      /opt/microshift/manifest-images.sh
+
+# MicroShift's control plane comes from release-info; everything else — the
+# device plugin, Argo CD — is named only by the manifests that deploy it, so
+# render those and take the images out of the result. Every path here is one
+# MicroShift itself renders at start-up.
+# && between the steps, and an explicit exit inside the loop: a `;` chain takes
+# the status of the last command only, so a skopeo copy that failed halfway
+# through the list would still build, and the node would find a mapping entry
+# with no cache directory behind it at first boot.
 RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
-    images="$(jq -r '.images[]' /usr/share/microshift/release/release-"$(uname -m)".json)" ; \
-    images="${images} $(awk '{for(i=1;i<NF;i++) if($i=="image:"){gsub(/"/,"",$(i+1)); print $(i+1)}}' \
-        /etc/microshift/manifests/nvidia-device-plugin.yml | sort -u)" ; \
+    images="$(jq -r '.images[]' /usr/share/microshift/release/release-"$(uname -m)".json)" && \
+    images="${images} $(/opt/microshift/manifest-images.sh \
+        /usr/lib/microshift/manifests /usr/lib/microshift/manifests.d/*/ \
+        /etc/microshift/manifests /etc/microshift/manifests.d/*/)" && \
     for img in ${images} ; do \
         /opt/physically-bound-images/embed_image.sh "${img}" \
-            --authfile /run/secrets/pull-secret.json ; \
+            --authfile /run/secrets/pull-secret.json || exit 1 ; \
     done
 
 RUN bootc container lint
