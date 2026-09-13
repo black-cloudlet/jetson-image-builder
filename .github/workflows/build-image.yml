@@ -74,15 +74,20 @@ jobs:
           RHSM_PASSWORD: ${{ secrets.RHSM_PASSWORD }}
         run: subscription-manager register --username="$RHSM_USERNAME" --password="$RHSM_PASSWORD"
 
-      # The job container's / is overlayfs, unusable as an overlay upperdir, so
-      # podman would fall back to fuse-overlayfs and every layer commit would
-      # walk the whole rootfs. /scratch is the runner's ext4 disk.
+      # podman must end up on native overlay with the native diff, or every
+      # layer commit walks the whole rootfs (~2 min each). The job container's
+      # / is overlayfs, unusable as an upperdir, hence the bind onto /scratch,
+      # the runner's ext4 disk.
       - name: Put container storage on the runner's disk
         run: |
           mkdir -p /scratch/containers /scratch/tmp /var/lib/containers /var/tmp
           mount --bind /scratch/containers /var/lib/containers
           mount --bind /scratch/tmp /var/tmp
           df -h /var/lib/containers
+          # RHEL's storage.conf mounts overlay with metacopy=on, which also
+          # forces the naive diff. Drop it before podman initialises storage.
+          sed -i '/^mountopt = /s/,\?metacopy=on//' /etc/containers/storage.conf
+          grep -n '^mountopt' /etc/containers/storage.conf || true
           podman info --format '{{.Store.GraphDriverName}} {{.Store.GraphStatus}}' | tee /tmp/graph
           grep -q 'Native Overlay Diff:true' /tmp/graph \
             || { echo "::error::podman is not on native overlay; layer commits will take minutes each"; exit 1; }
