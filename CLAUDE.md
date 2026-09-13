@@ -185,7 +185,24 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   this one only orders against it), plus the NVIDIA device plugin
   (`nvidia-ctk runtime configure --runtime=crio` writing
   `/etc/crio/crio.conf.d/99-nvidia.toml`, the plugin manifest and a kustomization in
-  `/etc/microshift/manifests`, and the plugin image embedded alongside MicroShift's).
+  `/etc/microshift/manifests`, and the plugin image embedded alongside MicroShift's),
+  configured for **GPU time slicing**: a `nvidia-device-plugin-config` ConfigMap carrying
+  `sharing.timeSlicing.resources[nvidia.com/gpu].replicas` = `GPU_TIME_SLICING_REPLICAS`
+  (default 4) and a strategic-merge patch mounting it and setting `CONFIG_FILE`. The Orin
+  has one iGPU, so without replicas exactly one pod can hold `nvidia.com/gpu` and every
+  other GPU workload waits for it; replicas advertise the same device N times and the driver
+  interleaves the contexts. No memory isolation and no fairness between them, so N is a claim
+  about what fits in the SOM's RAM, not a free multiplier — the 32 GB POC module is the
+  constraint to size it against. `GPU_TIME_SLICING_REPLICAS=1` turns sharing off (the plugin
+  only replicates above 1), so the file and its mount are unconditional and the knob is one
+  number. `renameByDefault` stays false, so the resource is still plain `nvidia.com/gpu` and
+  stock pod specs need no change.
+  A patch rather than a hand-written DaemonSet, because the manifest is curl'd from the
+  device plugin release and a local copy would drift at the next bump; kustomize merges
+  containers by name, env by name, volumeMounts by mountPath and volumes by name, so
+  upstream's `FAIL_ON_INIT_ERROR` and kubelet-socket hostPath survive. A patch that stops
+  matching is a silent no-op in kustomize, so the smoke test runs `oc kustomize` and checks
+  the rendered output for both the added fields and the upstream ones.
   Images are copied into the main store rather than referenced as an additional store, because
   an image upgrade overwrites an additional store (RHEL-75827). **No `dnf upgrade`**: Red Hat's
   own file runs one, but here it could pull a kernel past 5.14.0-687.42.1 and the Tegra kmod is
@@ -299,7 +316,9 @@ hardware as of this writing.
    with no registry reachable (that is what the embedding buys), `vgs` showing free extents in
    VG `rhel`, and a PVC binding against the topolvm storage class.
 3. Confirm the device plugin: `oc get ds -n kube-system nvidia-device-plugin-daemonset` and
-   `nvidia.com/gpu` in the node's allocatable resources.
+   `nvidia.com/gpu` in the node's allocatable resources — with time slicing that should read
+   `GPU_TIME_SLICING_REPLICAS`, not 1. Then schedule that many GPU pods at once and watch for
+   the OOM that says the replica count is above what the SOM's RAM can hold.
 4. Add the bound app images (PostgreSQL, RabbitMQ, KServe, the model server) through
    `embed_image.sh`, and their manifests to `/etc/microshift/manifests/kustomization.yaml`.
 5. Verify a GPU pod schedules and KServe answers an inference request with no network attached.

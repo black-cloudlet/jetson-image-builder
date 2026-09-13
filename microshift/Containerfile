@@ -61,10 +61,53 @@ RUN mkdir -p /etc/microshift/manifests && \
     curl -fsSL -o /etc/microshift/manifests/nvidia-device-plugin.yml \
       "https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/${NVIDIA_DEVICE_PLUGIN_VER}/deployments/static/nvidia-device-plugin.yml"
 
+# Time slicing. The Orin has one iGPU, so without it exactly one pod can hold
+# nvidia.com/gpu and every other GPU workload — KServe, the model server, a
+# second inference pod — waits for the node to be drained of the first. Replicas
+# advertise the same device N times; the driver interleaves the contexts. There
+# is no memory isolation and no fairness guarantee between them, so N is a
+# statement about how many workloads are expected to fit in the SOM's RAM, not a
+# free multiplier.
+#
+# 1 turns sharing off: the plugin only replicates when replicas > 1, so the
+# config file and its mount stay in place either way and the knob is one number.
+# renameByDefault is left false, so the resource is still plain nvidia.com/gpu
+# and the upstream manifest and stock pod specs need no further patching.
+ARG GPU_TIME_SLICING_REPLICAS=4
+RUN case "${GPU_TIME_SLICING_REPLICAS}" in \
+      '' | *[!0-9]*) \
+        echo "GPU_TIME_SLICING_REPLICAS is not a number: '${GPU_TIME_SLICING_REPLICAS}'" ; \
+        exit 1 ;; \
+    esac ; \
+    [ "${GPU_TIME_SLICING_REPLICAS}" -ge 1 ] || \
+      { echo "GPU_TIME_SLICING_REPLICAS must be at least 1; 1 disables sharing" ; \
+        exit 1 ; } ; \
+    printf 'apiVersion: v1\n\
+kind: ConfigMap\n\
+metadata:\n\
+  name: nvidia-device-plugin-config\n\
+  namespace: kube-system\n\
+data:\n\
+  config.yaml: |\n\
+    version: v1\n\
+    sharing:\n\
+      timeSlicing:\n\
+        resources:\n\
+          - name: nvidia.com/gpu\n\
+            replicas: %s\n' "${GPU_TIME_SLICING_REPLICAS}" \
+      > /etc/microshift/manifests/nvidia-device-plugin-config.yaml
+
+COPY microshift/nvidia-device-plugin-time-slicing.yaml \
+      /etc/microshift/manifests/nvidia-device-plugin-time-slicing.yaml
+
 RUN printf 'apiVersion: kustomize.config.k8s.io/v1beta1\n\
 kind: Kustomization\n\
 resources:\n\
-  - nvidia-device-plugin.yml\n' > /etc/microshift/manifests/kustomization.yaml
+  - nvidia-device-plugin.yml\n\
+  - nvidia-device-plugin-config.yaml\n\
+patches:\n\
+  - path: nvidia-device-plugin-time-slicing.yaml\n' \
+      > /etc/microshift/manifests/kustomization.yaml
 
 # MicroShift's control plane, plus the device plugin image named by the manifest
 # (which uses "- image:" list form, hence the field scan).
