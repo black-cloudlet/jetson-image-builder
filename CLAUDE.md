@@ -189,10 +189,9 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   plus `microshift-gitops` — core Argo CD, no web console, shipped as a manifest set
   under `/usr/lib/microshift/manifests.d/` and deployed on first start. It comes from
   the **OpenShift GitOps channel** (`gitops-<GITOPS_VER>-for-rhel-9-aarch64-rpms`,
-  default `1.18`, the line supported against 4.20), not from `rhocp`, so the
-  subscription needs that entitlement too; when the repo id is wrong the build prints
-  the `gitops-*` sections of `redhat.repo` rather than dnf's bare "Unknown repo".
-  Argo CD wants ~250 MB beyond MicroShift's own footprint.
+  default `1.19`), not from `rhocp`, so the subscription needs that entitlement too and
+  the channel is a third `--enablerepo` on the one `dnf install`. Argo CD wants ~250 MB
+  beyond MicroShift's own footprint.
   Images are copied into the main store rather than referenced as an additional store, because
   an image upgrade overwrites an additional store (RHEL-75827). **No `dnf upgrade`**: Red Hat's
   own file runs one, but here it could pull a kernel past 5.14.0-687.42.1 and the Tegra kmod is
