@@ -195,8 +195,9 @@ without standing up a self-hosted machine. Both the split and the UBI-builder pa
 
 The host's `/mnt` is bind-mounted into the job container as `/scratch`, and `/var/lib/containers`,
 `/var/tmp` and the ISO output directory are bound onto it: partly for space, mainly because the
-container's own writable layer is overlayfs, on which podman falls back to `fuse-overlayfs` and
-every layer commit takes about two minutes. The step fails unless podman reports native overlay.
+container's own writable layer is overlayfs, on which podman cannot use the native layer diff and
+every commit takes about two minutes. RHEL's `metacopy=on` mount option has the same effect and
+is stripped from `storage.conf`. The step fails unless podman reports `Native Overlay Diff:true`.
 
 ## Storage layout
 

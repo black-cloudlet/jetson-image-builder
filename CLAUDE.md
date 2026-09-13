@@ -117,9 +117,11 @@ Target stack on the device:
    way. The host's `/mnt` is bind-mounted into the job container as `/scratch`, and
    `/var/lib/containers`, `/var/tmp` and the ISO output are bound onto it unconditionally. Space
    is one reason; the other is that the job container's `/` is overlayfs, which the kernel refuses
-   as an overlay upperdir, so podman left there falls back to `fuse-overlayfs` and every layer
-   commit walks the whole rootfs (~2 min per instruction, ~20 of the microshift job's 24 build
-   minutes). The step fails unless `podman info` reports `Native Overlay Diff:true`.
+   as an overlay upperdir, so podman left there cannot use the native layer diff and every commit
+   walks the whole rootfs (~2 min per instruction, ~20 of the microshift job's 24 build minutes).
+   RHEL's `storage.conf` then defeats the bind on its own: it mounts overlay with `metacopy=on`,
+   which also forces the naive diff, so the step strips that option too. It fails unless
+   `podman info` reports `Native Overlay Diff:true`.
 7. **Three layers, one directory per Kubernetes variant.** `base/` republishes the pinned
    vendor image under our own name and adds nothing — it exists so the pin lives in one file
    and so there is a stable internal name to mirror into the air-gapped registry. `apps/`
@@ -354,8 +356,9 @@ kubeconfig (`/etc/rancher/k3s/k3s.yaml`, root-only) should be opened to the `jet
   the name notices. Ask for the `.toml` path.
 - A bare `test` in a smoke test exits 1 with no output, so the log cannot say which path was
   missing. Every check names what it looked for and lists the directory.
-- podman in a `container:` job silently runs on `fuse-overlayfs` unless its storage is on a real
-  filesystem; every layer commit then takes minutes. Keep the `/scratch` bind and its check.
+- podman in a `container:` job silently loses the native overlay diff — storage on overlayfs, or
+  RHEL's `metacopy=on` mount option — and every layer commit then takes minutes. Keep the
+  `/scratch` bind, the `metacopy` strip and the `Native Overlay Diff:true` check.
 
 **Git / delivery.** Claude has no push access. Produce files; the maintainer copies them into the
 local checkout and pushes. Always state which files changed and give the `cp` + `git` commands.
