@@ -301,7 +301,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
 - `microshift/config.toml` — bib config with a **custom kickstart** (bib then adds only `ostreecontainer`;
   `[customizations.user]`/`filesystem` cannot be combined with a custom kickstart, so
   everything lives in the kickstart): `text --non-interactive`, `timezone Asia/Jerusalem --utc`,
-  static `192.168.1.10/24` gw `192.168.1.1` on link with `--hostname=Jetson`, `ignoredisk
+  static `192.168.1.10/24` gw `192.168.1.254` on `eth0` with `--hostname=jetson-1`, `ignoredisk
   --only-use=mmcblk0`, `clearpart --all` + `reqpart --add-boot` + one VG `rhel` on the rest of
   the eMMC holding a 40 GiB xfs root and **no swap**, **with the remaining ~16.5 GiB of extents
   left free for MicroShift's LVMS provisioner** (fill the VG and the cluster has no dynamic PV

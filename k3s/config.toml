@@ -8,7 +8,7 @@ timezone Asia/Jerusalem --utc
 
 # Static: two devices imaged from one ISO collide on a segment. --nameserver lands in the
 # installed system's NetworkManager profile, so it is what resolv.conf is generated from.
-network --bootproto=static --ip=192.168.1.10 --netmask=255.255.255.0 --gateway=192.168.1.1 --nameserver=192.168.1.1 --device=link --onboot=on --activate --hostname=Jetson
+network --bootproto=static --ip=192.168.1.10 --netmask=255.255.255.0 --gateway=192.168.1.254 --nameserver=192.168.1.1 --device=link --onboot=on --activate --hostname=Jetson
 
 # On-board eMMC only; no swap. Root takes the whole VG rather than leaving free extents
 # as the microshift variant does: k3s provisions PVs from local-path on the root
