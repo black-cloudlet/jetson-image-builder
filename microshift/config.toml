@@ -8,7 +8,7 @@ timezone Asia/Jerusalem --utc
 
 # Static: two devices imaged from one ISO collide on a segment. --nameserver lands in the
 # installed system's NetworkManager profile, so it is what resolv.conf is generated from.
-network --bootproto=static --ip=192.168.1.1 --netmask=255.255.255.0 --gateway=192.168.1.254 --nameserver=192.168.1.1 --device=eth0 --onboot=on --activate --hostname=jetson-1
+network --bootproto=static --ip=192.168.1.10 --netmask=255.255.255.0 --gateway=192.168.1.254 --nameserver=192.168.1.1 --device=eth0 --onboot=on --activate --hostname=jetson-1
 
 # On-board eMMC only; 40 GiB root, no swap, the rest of the VG left free for MicroShift's LVMS.
 ignoredisk --only-use=mmcblk0
