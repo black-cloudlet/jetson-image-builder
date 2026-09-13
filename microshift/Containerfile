@@ -61,9 +61,8 @@ RUN mkdir -p /etc/microshift/manifests && \
     curl -fsSL -o /etc/microshift/manifests/nvidia-device-plugin.yml \
       "https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/${NVIDIA_DEVICE_PLUGIN_VER}/deployments/static/nvidia-device-plugin.yml"
 
-# The kustomization, the time-slicing ConfigMap and the strategic-merge patch
-# that mounts it. A patch, not a fork: nvidia-device-plugin.yml above is curl'd
-# from the release, and a local copy would drift at the next bump.
+# Kustomization, time-slicing ConfigMap and the patch that mounts it. A patch,
+# not a fork: nvidia-device-plugin.yml above is curl'd from the release.
 COPY microshift/manifests/ /etc/microshift/manifests/
 
 # MicroShift's control plane, plus the device plugin image named by the manifest

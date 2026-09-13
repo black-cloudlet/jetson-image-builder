@@ -189,19 +189,16 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   configured for **GPU time slicing**. `microshift/manifests/` holds the kustomization, a
   `nvidia-device-plugin-config` ConfigMap carrying
   `sharing.timeSlicing.resources[nvidia.com/gpu].replicas` (4) and a strategic-merge patch
-  mounting it and setting `CONFIG_FILE`; the whole directory is `COPY`d over
-  `/etc/microshift/manifests`, and only `nvidia-device-plugin.yml` is still curl'd. The Orin
-  has one iGPU, so without replicas exactly one pod can hold `nvidia.com/gpu` and every
-  other GPU workload waits for it; replicas advertise the same device N times and the driver
-  interleaves the contexts. No memory isolation between them, so N is a claim about what fits
-  in the SOM's RAM — the 32 GB POC module is the constraint to size it against, and 1
-  disables sharing (the plugin only replicates above 1). `renameByDefault` stays off, so the
-  resource is plain `nvidia.com/gpu` and stock pod specs need no change.
-  A patch, not a fork: the upstream manifest is curl'd from the release, and kustomize merges
-  containers by name, env by name, volumeMounts by mountPath and volumes by name, so
-  upstream's `FAIL_ON_INIT_ERROR` and kubelet-socket hostPath survive. A patch that stops
-  matching is a silent no-op, so the smoke test runs `oc kustomize` and checks the rendered
-  output for both the added fields and the upstream ones.
+  mounting it and setting `CONFIG_FILE`; the directory is `COPY`d over
+  `/etc/microshift/manifests` and only `nvidia-device-plugin.yml` is still curl'd, so the
+  upstream manifest is patched, never forked. The Orin has one iGPU, so without replicas
+  exactly one pod can hold `nvidia.com/gpu` and every other GPU workload waits for it. No
+  memory isolation between replicas, so the count is a claim about what fits in the SOM's
+  RAM — 32 GB on the POC module — and 1 disables sharing. `renameByDefault` stays off, so
+  the resource is plain `nvidia.com/gpu` and stock pod specs need no change.
+  A patch that stops matching is a silent no-op in kustomize, so the smoke test runs
+  `oc kustomize` and checks the render for both the added fields and the upstream ones it
+  must not have replaced.
   Images are copied into the main store rather than referenced as an additional store, because
   an image upgrade overwrites an additional store (RHEL-75827). **No `dnf upgrade`**: Red Hat's
   own file runs one, but here it could pull a kernel past 5.14.0-687.42.1 and the Tegra kmod is

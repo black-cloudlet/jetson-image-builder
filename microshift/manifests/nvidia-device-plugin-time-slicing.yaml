@@ -1,6 +1,5 @@
 # Kustomize merges containers by name, env by name, volumeMounts by mountPath
-# and volumes by name, so upstream's FAIL_ON_INIT_ERROR, securityContext and
-# device-plugin hostPath all survive. The smoke test renders this and checks.
+# and volumes by name, so upstream's own fields survive.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -11,9 +10,8 @@ spec:
     spec:
       containers:
         - name: nvidia-device-plugin-ctr
-          # CONFIG_FILE is the plugin's env var for --config-file. Command line
-          # and environment win over the file, so nothing here may set a flag
-          # the config also sets.
+          # The plugin's env var for --config-file. Env wins over the file, so
+          # nothing here may set a flag the config also sets.
           env:
             - name: CONFIG_FILE
               value: /etc/nvidia-device-plugin/config.yaml

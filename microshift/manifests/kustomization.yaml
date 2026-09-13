@@ -1,6 +1,4 @@
-# MicroShift renders this at first start. nvidia-device-plugin.yml is not in
-# this directory in git — the Containerfile curls it from the device plugin
-# release, so the upstream manifest is never forked, only patched.
+# nvidia-device-plugin.yml is not in git: the Containerfile curls it in.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
