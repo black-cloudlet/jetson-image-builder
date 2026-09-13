@@ -57,25 +57,3 @@ mkdir -p "$CACHE_DIR"
 skopeo copy --multi-arch="$multi_arch" --preserve-digests "${additional_copy_args[@]}" \
 	"docker://$src" "dir:$CACHE_DIR/$fsha"
 echo "$dst,$fsha" >> "$CACHE_DIR/mapping.txt"
-
-# The dir: transport names each blob after its digest, so a layer this image
-# shares with one already embedded is the same file under another directory —
-# and images from one OpenShift release share their base layers. Hardlink rather
-# than keep a second copy.
-#
-# This buys nothing on the node: /usr is an ostree checkout, which stores by
-# content and hardlinks identical files whatever they are named. It is the layer
-# tar that carries the duplicates, so what shrinks is the pushed image, the ISO
-# and every upgrade download. Only blobs — manifest.json, version and
-# <digest>.manifest.json are per-image and share no name.
-for blob in "$CACHE_DIR/$fsha"/*; do
-	name=${blob##*/}
-	[[ $name =~ ^[0-9a-f]{64,}$ ]] || continue
-
-	for other in "$CACHE_DIR"/*/"$name"; do
-		if [[ -f $other && $other != "$blob" ]]; then
-			ln -f "$other" "$blob"
-			break
-		fi
-	done
-done

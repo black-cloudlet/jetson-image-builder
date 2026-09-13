@@ -258,7 +258,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   not handle. The unit deliberately does **not** want `network-online.target`: the copy is
   local-disk only and waiting for a carrier that never comes would add
   NetworkManager-wait-online's timeout to every boot.
-  Three things keep the cache from costing more than it has to. An image referenced by tag is
+  Two things keep the cache from costing more than it has to. An image referenced by tag is
   copied `--multi-arch=system`, not `all`: the builder is native aarch64 and so is the node, so
   every other platform in a manifest list is dead weight — the device plugin now, application
   images later, where a docker.io manifest list can carry six platforms. One referenced by
@@ -267,12 +267,12 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   manifest asking for it would not find it. That costs nothing for MicroShift's release images
   — `release-aarch64.json` and `release-x86_64.json` pin different digests, so each is a single
   manifest already. The distinction is on the **recorded** name, so a `$REPO:$TAG@sha256:$SHA`
-  reference, which is stored under its tag, counts as tagged. After each copy,
-  `embed_image.sh` hardlinks any blob whose name already exists elsewhere in the cache: the
-  `dir:` transport names a blob after its digest, so a layer shared by two images of one
-  OpenShift release is the same file twice. That saves nothing on the node — `/usr` is an ostree
-  checkout and stores by content anyway — but the duplicates are real bytes in the layer tar,
-  so the pushed image, the ISO and every upgrade download shrink. And `copy_embedded_images.sh`
+  reference, which is stored under its tag, counts as tagged. Deduplicating the cache itself was
+  tried and removed: the `dir:` transport names each blob after its digest, so a layer two
+  embedded images share is the same file twice and hardlinking them is easy — but it frees
+  nothing on the node, because `/usr` is an ostree checkout and stores by content, so those two
+  files are already one object there. Only the layer tar carries both copies, so what it would
+  buy is ISO size and upgrade bandwidth, and neither was the problem. And `copy_embedded_images.sh`
   removes images an earlier version of the OS image put in containers-storage and this one no
   longer names, recording what it applied in `/var/lib/physically-bound-images/applied.txt`
   (containers-storage is machine state, the cache is not, so nothing else remembers). Nothing
