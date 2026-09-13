@@ -84,8 +84,7 @@ empty one an account with no password at all — neither is visible until the IS
 Entitlement comes from registering inside the build container, not from a certificate tarball —
 nothing expires in a secret, and `redhat.repo` is generated fresh by the registration. Each run
 job registers and releases the slot again in an `if: always()` unregister step — every job,
-including the two that install no RPMs, because `xfsprogs` for the scratch disk is in the RHEL
-repos rather than UBI's. The
+including the two that install no RPMs, so that all layers share one code path. The
 subscription has to carry an OpenShift entitlement or `rhocp-4.20-for-rhel-9-aarch64-rpms` never
 appears and the build fails at `--enablerepo`.
 
@@ -194,10 +193,10 @@ entitlement. GitHub offers no RHEL-hosted runner, so this is the closest thing t
 without standing up a self-hosted machine. Both the split and the UBI-builder pattern follow
 [redhat-et/edge-ai-image-pipelines](https://github.com/redhat-et/edge-ai-image-pipelines).
 
-The runner's scratch disk (`/dev/nvme0n1`) is formatted and `/var/lib/containers`, `/var/tmp` and
-the ISO output directory are moved onto it. Roughly 10 GB of embedded container images plus a
-multi-gigabyte ISO does not fit in the container's default writable layer. If that device is
-already mounted the step warns and continues rather than reformatting something in use.
+The host's `/mnt` is bind-mounted into the job container as `/scratch`, and `/var/lib/containers`,
+`/var/tmp` and the ISO output directory are bound onto it: partly for space, mainly because the
+container's own writable layer is overlayfs, on which podman falls back to `fuse-overlayfs` and
+every layer commit takes about two minutes. The step fails unless podman reports native overlay.
 
 ## Storage layout
 

@@ -59,25 +59,17 @@ jobs:
           RHSM_PASSWORD: ${{ secrets.RHSM_PASSWORD }}
         run: subscription-manager register --username="$RHSM_USERNAME" --password="$RHSM_PASSWORD"
 
-      # / is the job container's writable layer, on the runner's OS disk;
-      # /scratch is the runner's ephemeral disk. Use whichever has more room,
-      # rather than assuming either. If /mnt is a plain directory on the OS
-      # disk the two are equal and the binds are skipped.
-      - name: Move container storage and ISO output onto the scratch disk
+      # Same as build-image.yml; the ISO output goes there too for space.
+      - name: Put container storage and ISO output on the runner's disk
         run: |
-          lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT || true
-          df -h / /scratch
-          root_free=$(df -kP / | awk 'NR==2 {print $4}')
-          scratch_free=$(df -kP /scratch | awk 'NR==2 {print $4}')
-          if [ "$scratch_free" -le "$root_free" ]; then
-            echo "::notice::/scratch has ${scratch_free}K free vs ${root_free}K on /; leaving storage on the OS disk."
-            exit 0
-          fi
           mkdir -p /scratch/containers /scratch/tmp /scratch/output /var/lib/containers /var/tmp output
           mount --bind /scratch/containers /var/lib/containers
           mount --bind /scratch/tmp /var/tmp
           mount --bind /scratch/output output
-          df -h /var/lib/containers /var/tmp output
+          df -h /var/lib/containers
+          podman info --format '{{.Store.GraphDriverName}} {{.Store.GraphStatus}}' | tee /tmp/graph
+          grep -q 'Native Overlay Diff:true' /tmp/graph \
+            || { echo "::error::podman is not on native overlay; layer commits will take minutes each"; exit 1; }
 
       - name: Logins
         env:
