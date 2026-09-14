@@ -1,18 +1,3 @@
-# cert-manager.yaml is not in git: the Containerfile curls it in, pinned by
-# CERT_MANAGER_VER.
-#
-# KServe is the only reason cert-manager is on this node. Its three webhook
-# serving certificates are issued by a self-signed Issuer in the kserve
-# namespace and cainjector writes the CA into the webhook configurations that
-# admit InferenceServices and ServingRuntimes; without that, every
-# serving.kserve.io write fails closed (failurePolicy: Fail). Nothing here
-# talks to an ACME server or an external CA — there is no network to talk over.
-#
-# 010- so this root is applied before the KServe resources that need the
-# cert-manager CRDs and webhook. MicroShift sorts manifests.d lexicographically
-# and applies each root in turn, retrying a failing one every 10s for up to 10
-# minutes, which is what covers the gap between a CRD being applied here and
-# being established and served by the time 020- asks for it.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

@@ -22,7 +22,7 @@ jobs:
     uses: ./.github/workflows/build-image.yml
     with:
       name: base
-      containerfile: base/Containerfile
+      containerfile: base/Containerfile.base
       smoke-test: base/smoke-test.sh
     secrets: inherit
     permissions: { contents: read, packages: write }
@@ -36,8 +36,8 @@ jobs:
     uses: ./.github/workflows/build-image.yml
     with:
       name: bound-images
-      containerfile: base/Containerfile.bound-images
-      smoke-test: base/smoke-test.bound-images.sh
+      containerfile: base/Containerfile.podman
+      smoke-test: base/smoke-test.podman.sh
       build-args: BASE_IMAGE=${{ needs.base.outputs.image-ref }}
     secrets: inherit
     permissions: { contents: read, packages: write }
