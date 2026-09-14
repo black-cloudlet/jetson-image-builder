@@ -36,23 +36,30 @@ RUN firewall-offline-cmd --zone=trusted --add-source=10.42.0.0/16 && \
 
 # OVN images need the root subtree shared. Skipped on bare metal, where systemd
 # has already done it.
-RUN printf '[Unit]\n\
-Description=Make root filesystem shared\n\
-Before=microshift.service\n\
-ConditionVirtualization=container\n\
-[Service]\n\
-Type=oneshot\n\
-ExecStart=/usr/bin/mount --make-rshared /\n\
-[Install]\n\
-WantedBy=multi-user.target\n' > /usr/lib/systemd/system/microshift-make-rshared.service && \
-    systemctl enable microshift-make-rshared.service
+COPY <<'EOF' /usr/lib/systemd/system/microshift-make-rshared.service
+[Unit]
+Description=Make root filesystem shared
+Before=microshift.service
+ConditionVirtualization=container
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mount --make-rshared /
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+RUN systemctl enable microshift-make-rshared.service
 
 # Do not start before the embedded images have been replayed.
-RUN mkdir -p /usr/lib/systemd/system/microshift.service.d && \
-    printf '[Unit]\n\
-Requires=copy-embedded-images.service\n\
-After=copy-embedded-images.service\n' \
-      > /usr/lib/systemd/system/microshift.service.d/microshift-copy-images.conf
+RUN mkdir -p /usr/lib/systemd/system/microshift.service.d
+
+COPY <<'EOF' /usr/lib/systemd/system/microshift.service.d/microshift-copy-images.conf
+[Unit]
+Requires=copy-embedded-images.service
+After=copy-embedded-images.service
+EOF
 
 # CRI-O needs the NVIDIA runtime before a pod can request a GPU. MicroShift
 # applies the manifest through kustomize on first start.
