@@ -18,9 +18,7 @@ ARG GITOPS_VER=1.19
 RUN dnf install -y \
         --enablerepo="rhocp-${USHIFT_VER}-for-rhel-9-$(uname -m)-rpms" \
         --enablerepo="fast-datapath-for-rhel-9-$(uname -m)-rpms" \
-        --enablerepo="gitops-${GITOPS_VER}-for-rhel-9-$(uname -m)-rpms" \
-        firewalld jq microshift microshift-release-info openshift-clients \
-        microshift-gitops && \
+        firewalld jq microshift microshift-release-info openshift-clients && \
     systemctl enable microshift && \
     dnf clean all
 

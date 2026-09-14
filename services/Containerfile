@@ -6,7 +6,12 @@ COPY services/manifests/ /etc/microshift/manifests.d/
 ARG CERT_MANAGER_VER=v1.21.2
 RUN curl -fsSL \
       -o /etc/microshift/manifests.d/010-cert-manager/cert-manager.yaml \
-      "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VER}/cert-manager.yaml" && \
+      "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VER}/cert-manager.yaml"
+
+ARG EXTERNAL_SECRETS_VER=v2.8.0
+RUN curl -fsSL \
+      -o /etc/microshift/manifests.d/020-external-secrets/external-secrets.yaml \
+      "https://github.com/external-secrets/external-secrets/releases/download/${EXTERNAL_SECRETS_VER}/external-secrets.yaml"
 
 ARG SERVICE_IMAGES=""
 RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
