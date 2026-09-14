@@ -24,6 +24,12 @@ on:
         description: newline-separated KEY=VALUE pairs
         type: string
         default: ""
+      extra-tags:
+        description: |
+          moving tags pushed alongside <date>-<sha8> and latest, whitespace
+          separated. All of them point at the same digest.
+        type: string
+        default: ""
       runs-on:
         description: runner label; must be native aarch64
         type: string
@@ -94,9 +100,31 @@ jobs:
           grep -q 'Native Overlay Diff:true' /tmp/graph \
             || { echo "::error::podman is not on native overlay; layer commits will take minutes each"; exit 1; }
 
-      - name: Compute tag
+      # One immutable tag, then whatever moving ones the caller asked for. The
+      # immutable one is what a node is rolled back to and what the mirror keeps;
+      # the moving ones are what something upgrading follows.
+      - name: Compute tags
         id: meta
-        run: echo "tag=$(date -u +%Y%m%d)-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+        env:
+          EXTRA_TAGS: ${{ inputs.extra-tags }}
+        run: |
+          tag="$(date -u +%Y%m%d)-${GITHUB_SHA::8}"
+          # Unquoted on purpose: splits on any whitespace, newlines included.
+          tags="$(echo $tag latest $EXTRA_TAGS)"
+          # Before the build rather than after it: a tag podman rejects should
+          # not cost twenty minutes first.
+          for t in $tags; do
+            case $t in
+              [A-Za-z0-9_]*) ;;
+              *) echo "::error::not a usable image tag: ${t}"; exit 1 ;;
+            esac
+            case $t in
+              *[!A-Za-z0-9._-]*) echo "::error::not a usable image tag: ${t}"; exit 1 ;;
+            esac
+          done
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "building $IMAGE with tags: $tags"
 
       - name: Login GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -114,26 +142,37 @@ jobs:
       - name: Build
         env:
           BUILD_ARGS: ${{ inputs.build-args }}
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           args=()
           while IFS= read -r line; do
             [ -z "$line" ] && continue
             args+=(--build-arg "$line")
           done <<< "$BUILD_ARGS"
+          for t in $TAGS; do
+            args+=(-t "$IMAGE:$t")
+          done
           podman build "${args[@]}" \
             --secret id=pullsecret,src=/tmp/pull-secret.json \
-            -t "$IMAGE:${{ steps.meta.outputs.tag }}" -t "$IMAGE:latest" \
             -f "${{ inputs.containerfile }}" .
 
       - name: Smoke test
         run: podman run --rm -i "$IMAGE:${{ steps.meta.outputs.tag }}" bash -s < "${{ inputs.smoke-test }}"
 
-      # Downstream layers consume the digest, not the tag.
+      # Downstream layers consume the digest, not the tag. Every tag names the
+      # same manifest, so the digest is taken from the first push and the rest
+      # only move a name onto it.
       - name: Push
         id: push
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          podman push --digestfile=/tmp/digest "$IMAGE:${{ steps.meta.outputs.tag }}"
-          podman push "$IMAGE:latest"
+          podman push --digestfile=/tmp/digest "$IMAGE:$TAG"
+          for t in $TAGS; do
+            [ "$t" = "$TAG" ] && continue
+            podman push "$IMAGE:$t"
+          done
           echo "image-ref=${IMAGE}@$(cat /tmp/digest)" >> "$GITHUB_OUTPUT"
 
       - name: Unregister

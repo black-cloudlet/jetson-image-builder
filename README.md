@@ -10,8 +10,16 @@ registry reachable. One variant builds: `microshift/`. `k3s/` is
 still in the tree and reuses the same shared layers, but **nothing builds it** — its caller
 workflow was deleted, so reviving it starts with writing `build-k3s.yml` again.
 
-Every layer is published as `ghcr.io/black-cloudlet/jetson-orin-bootc-<layer>:<YYYYMMDD-sha8>`,
-and the finished variant also uploads an installer ISO as a workflow artifact.
+Every layer is published as `ghcr.io/black-cloudlet/jetson-orin-bootc-<layer>`, under four tags
+that all name the same manifest: `<YYYYMMDD-sha8>`, which never moves and is what a node is
+rolled back to; `latest`; `stable`, so the four layers can be mirrored into the air-gapped
+registry as one release set; and the MicroShift minor, `4.20`, on the two layers that contain
+MicroShift. The finished variant also uploads an installer ISO as a workflow artifact.
+
+`stable` is what a node is meant to follow for `bootc upgrade`, and it does not work yet: the
+ISO installs the services layer **pinned by digest**, so the deployment origin has nothing to
+re-resolve, and it names GHCR rather than the air-gapped registry. Closing that needs either a
+one-time `bootc switch` on the node or a retag before bootc-image-builder — see CLAUDE.md.
 
 Each layer is pushed separately and builds on the previous one's digest — four for microshift,
 three for k3s. The two shared layers share the `base/` directory, as `Containerfile.base` and

@@ -366,8 +366,29 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
 - `.github/workflows/build-image.yml` — **reusable**: register, bind container storage onto the
   runner's disk so podman gets native overlay, write the
   pull secret, build the given Containerfile with the repo root as context, run the given
-  smoke-test inside the result, push `ghcr.io/<owner>/jetson-orin-bootc-<name>:<YYYYMMDD-sha8>`
-  + `latest`, and output the ref pinned by digest (`podman push --digestfile`).
+  smoke-test inside the result, push `ghcr.io/<owner>/jetson-orin-bootc-<name>` under every
+  tag the caller asked for, and output the ref pinned by digest
+  (`podman push --digestfile`). Tags are one immutable `<YYYYMMDD-sha8>` plus `latest` plus the
+  `extra-tags` input, all naming the same manifest: today `stable` on all four layers, so the
+  release set can be mirrored as one, and the MicroShift minor `4.20` on the two layers that
+  contain MicroShift. The caller passes that minor as a tag and as `USHIFT_VER` to the build
+  from the same two lines — a `4.20` tag on an image built from another channel would be a
+  claim nothing enforces. They are written twice because the `env` context is not available to
+  a reusable workflow's `with:`. Tags are validated before the build rather than after it: a
+  name podman would reject should not cost twenty minutes first.
+
+  **What a node follows is not settled yet.** `bootc upgrade` re-resolves the reference in the
+  deployment's origin, and that origin is whatever bib was given — `build-iso.yml` passes the
+  services layer **pinned by digest**, so there is nothing to re-resolve, and the reference
+  names GHCR, which an air-gapped node cannot reach anyway. `ostreecontainer` has no
+  `--target-imgref`, so anaconda cannot install from one reference and record another. `stable`
+  exists to be the reference a node eventually follows — in the air-gapped registry, not
+  GHCR — but getting the origin there still needs either a one-time `bootc switch` on the node
+  (the unit in the later-layers list) or retagging the image to its air-gapped name before bib
+  and having bib install that. Until one of those lands, a deployed node cannot upgrade at all.
+  Whichever it is, the node also needs `/etc/ostree/auth.json` for the air-gapped registry, and
+  `bootc-fetch-apply-updates.timer` is worth checking on the first boot: a timer pulling daily
+  from a registry that is only reachable between missions fails every day it is not.
   `.github/workflows/build-iso.yml` — **reusable**:
   register, substitute the two `@JETSON_*@` placeholders into `<variant>/config.toml` (in bash,
   not `sed`, with the secrets in `env:` — an `&`, a quote or a newline in a value would
@@ -414,7 +435,10 @@ hardware as of this writing.
 1. Run `build-microshift.yml` (dispatch — there is no PR build), `dd` the ISO, boot the devkit
    from USB with QSPI flashed from R36.5.x.
    Confirm `bootc status`, `lsmod | grep nvgpu`, `nvidia-ctk cdi list` → `nvidia.com/gpu=all`,
-   and a GPU container (`podman run --device nvidia.com/gpu=all …`). `jtop` in the same pass:
+   and a GPU container (`podman run --device nvidia.com/gpu=all …`). `bootc status` is also
+   where the origin problem above becomes visible: expect a GHCR reference pinned by digest,
+   which is exactly what cannot upgrade. Check `systemctl is-enabled
+   bootc-fetch-apply-updates.timer` in the same pass. `jtop` in the same pass:
    nothing enables a jtop service, so expect to find out there whether it works as installed.
 2. Same boot, confirm MicroShift: `systemctl status microshift`, `oc get pods -A` all running
    with no registry reachable (that is what the embedding buys), `vgs` showing free extents in
@@ -454,7 +478,11 @@ runner; whether the static `192.168.1.1` / hostname `jetson-1` baked into the IS
 per-device before a second node joins the air-gapped network, and whether
 `--domain=example.com` should be there at all with no resolver behind it; whether the k3s
 variant comes back at all, and if so how service images reach k3s's containerd, given that a
-second copy as `docker-archive` would put every application layer in `/usr` twice; and whether
+second copy as `docker-archive` would put every application layer in `/usr` twice; how a
+deployed node's origin gets pointed at the air-gapped registry's `stable` tag — a `bootc switch`
+unit or a retag before bib — and whether `stable` should keep moving on every green build of
+`main` or only when a build has been booted on hardware, which is the difference between an
+upgrade channel and a bookmark; and whether
 the resource numbers in `services/manifests/` (the ratios are enforced by the smoke test, the
 sizes are guesses) survive contact with the hardware.
 
