@@ -42,8 +42,6 @@ EOF
 RUN systemctl enable microshift-make-rshared.service
 
 # Do not start before the embedded images have been replayed.
-RUN mkdir -p /usr/lib/systemd/system/microshift.service.d
-
 COPY <<'EOF' /usr/lib/systemd/system/microshift.service.d/microshift-copy-images.conf
 [Unit]
 Requires=copy-embedded-images.service

@@ -342,8 +342,11 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   `k3s-airgap-images-arm64.tar.zst` plus the device plugin as a `docker-archive` tarball in
   `/usr/share/k3s/agent-images`, staged by `k3s-stage-assets.service` before `k3s.service`
   (the images directory is a symlink into `/usr/share`, the manifests directory a real one
-  because k3s writes its own bundled YAML into it); a kickstart whose root grows over the whole
-  VG, with ISO label `JETSON_ORIN_K3S` distinct from the microshift one. **`embed_image.sh`'s
+  because k3s writes its own bundled YAML into it); a kickstart that is the microshift one with
+  two changes — root grows over the whole VG, because k3s provisions PVs from local-path on the
+  root filesystem and free extents would be space the cluster cannot reach, and ISO label
+  `JETSON_ORIN_K3S`, because anaconda finds its stage2 by label and two variants sharing one
+  would pick whichever stick enumerated first. **`embed_image.sh`'s
   cache is useless here**, because it writes into podman's containers-storage and k3s's
   containerd does not read it. Reviving the variant means writing `build-k3s.yml` again.
 - `microshift/config.toml` — bib config with a **custom kickstart** (bib then adds only

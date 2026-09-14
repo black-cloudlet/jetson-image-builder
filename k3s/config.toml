@@ -7,7 +7,7 @@ keyboard us
 timezone Asia/Jerusalem --utc
 
 # Static: two devices imaged from one ISO collide on a segment.
-network --bootproto=static --ip=192.168.1.10 --netmask=255.255.255.0 --gateway=192.168.1.1 --device=link --onboot=on --activate --hostname=Jetson
+network --bootproto=static --ip=192.168.1.1 --netmask=255.255.255.0 --gateway=192.168.1.254 --device=eth0 --onboot=on --domain=example.com --activate --hostname=jetson-1
 
 # On-board eMMC only; no swap. Root takes the whole VG rather than leaving free extents
 # as the microshift variant does: k3s provisions PVs from local-path on the root
@@ -21,8 +21,8 @@ volgroup rhel pv.01
 logvol / --vgname=rhel --name=root --size=40960 --grow --fstype=xfs
 
 rootpw --lock
-user --name=jetson --groups=wheel --iscrypted --password=@JETSON_PASSWORD_HASH@
-sshkey --username=jetson "@JETSON_SSH_PUBKEY@"
+user --name=cloudlet --groups=wheel --iscrypted --password=@JETSON_PASSWORD_HASH@
+sshkey --username=cloudlet "@JETSON_SSH_PUBKEY@"
 
 reboot --eject
 """
