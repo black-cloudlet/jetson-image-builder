@@ -125,11 +125,8 @@ jobs:
             -t "$IMAGE:${{ steps.meta.outputs.tag }}" -t "$IMAGE:latest" \
             -f "${{ inputs.containerfile }}" .
 
-      # What the deployed tree occupies, near enough: the number the root LV has
-      # to be sized against, twice over once an upgrade leaves a rollback
-      # deployment beside the booted one. Per layer, so the differences down the
-      # chain also say which layer the bytes went into. A notice so it lands in
-      # the run summary instead of only the log.
+      # Roughly what the deployment occupies on the node — the number the root LV
+      # is sized against. Per layer, so the differences say where the bytes went.
       - name: Image size
         run: |
           bytes=$(podman image inspect --format '{{.Size}}' "$IMAGE:${{ steps.meta.outputs.tag }}")

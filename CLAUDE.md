@@ -258,16 +258,14 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   not handle. The unit deliberately does **not** want `network-online.target`: the copy is
   local-disk only and waiting for a carrier that never comes would add
   NetworkManager-wait-online's timeout to every boot.
-  Two things keep the cache from costing more than it has to. An image referenced by tag is
-  copied `--multi-arch=system`, not `all`: the builder is native aarch64 and so is the node, so
-  every other platform in a manifest list is dead weight — the device plugin now, application
-  images later, where a docker.io manifest list can carry six platforms. One referenced by
-  digest keeps `all`, because a digest names one exact manifest: if it is a list, picking an
-  architecture out of it would store the image under a digest that is not its own and the
-  manifest asking for it would not find it. That costs nothing for MicroShift's release images
-  — `release-aarch64.json` and `release-x86_64.json` pin different digests, so each is a single
-  manifest already. The distinction is on the **recorded** name, so a `$REPO:$TAG@sha256:$SHA`
-  reference, which is stored under its tag, counts as tagged. Deduplicating the cache itself was
+  Two things keep the cache from costing more than it has to. The copy is
+  `--multi-arch=system`, not `all`: the builder is native aarch64 and so is the node, so every
+  other platform in a manifest list is dead weight — the device plugin now, application images
+  later, where a docker.io manifest list can carry six platforms. A reference pinned to a
+  manifest-list digest still resolves on the node even though only one architecture was stored
+  under it, because containers-storage looks an image up by its explicit name before it looks by
+  digest (`storage/storage_reference.go:114-121`), and that name is what the copy recorded.
+  Deduplicating the cache itself was
   tried and removed: the `dir:` transport names each blob after its digest, so a layer two
   embedded images share is the same file twice and hardlinking them is easy — but it frees
   nothing on the node, because `/usr` is an ostree checkout and stores by content, so those two

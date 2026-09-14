@@ -10,8 +10,8 @@ set -euxo pipefail
 CACHE_DIR=/usr/lib/containers-image-cache
 MAPPING="$CACHE_DIR/mapping.txt"
 
-# containers-storage is machine state and the cache is not, so the only record
-# of what a previous boot put there is one this script keeps itself.
+# An upgrade replaces the cache but not containers-storage, so what a previous
+# boot put there is known only from a record this script keeps.
 APPLIED=/var/lib/physically-bound-images/applied.txt
 
 mkdir -p "${APPLIED%/*}"
@@ -19,22 +19,15 @@ keep="$APPLIED.new"
 if [[ -s $MAPPING ]]; then
 	cp "$MAPPING" "$keep"
 else
-	# An image built with nothing embedded is not an error; there may still be
-	# a previous version's images to clear out.
+	# Nothing embedded is not an error; a previous set may still need clearing.
 	echo "no embedded images at $MAPPING, nothing to copy"
 	: > "$keep"
 fi
 
-# Images left over from an image set we have since replaced are reclaimed by
-# nothing: the first thing that would is kubelet's image GC at 85% of the root
-# filesystem, and what it deletes is exactly these — on a node with no registry
-# to pull them back from. Only references this script recorded are touched.
-#
-# Before the copy, not after: freeing the superseded set first is the point, and
-# the source is local disk, so a copy cannot fail for want of an upstream. An
-# image CRI-O still holds through a container from the previous boot cannot be
-# removed yet, so that entry stays on the list and the next boot tries again
-# rather than losing track of it.
+# Before the copy: the superseded set is what makes room for its replacement,
+# and the source is local disk, so the copy cannot fail for want of an upstream.
+# A removal CRI-O refuses — it still holds the image through last boot's
+# containers — stays on the list so the next boot retries instead of orphaning it.
 if [[ -f $APPLIED ]]; then
 	while IFS=, read -r image sha; do
 		if grep -qxF "$image,$sha" "$keep"; then
