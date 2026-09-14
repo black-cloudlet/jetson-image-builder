@@ -8,6 +8,8 @@ RUN dnf install -y python3 python3-pip && \
     pip3 install --prefix=/usr --no-cache-dir "jetson-stats==${JTOP_VER}" && \
     dnf clean all
 
+RUN groupadd -r jtop
+
 # The cache is a plain directory, not an additional container store: an image
 # upgrade overwrites one of those (RHEL-75827).
 # Scripts from redhat-et/edge-ai-image-pipelines (Apache-2.0). The installed
