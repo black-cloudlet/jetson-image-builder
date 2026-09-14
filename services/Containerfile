@@ -1,8 +1,14 @@
+# Layer 4, microshift variant: what runs on the cluster. Above the variant
+# layer, so a service changing does not re-run the MicroShift install.
 ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-microshift:latest
 FROM ${BASE_IMAGE}
 
+# Numbered: MicroShift sorts manifests.d and applies each root in turn, and
+# retries a failing one for ten minutes — which covers a CRD not yet served.
 COPY services/manifests/ /etc/microshift/manifests.d/
 
+# Upstream installs, curl'd here and patched from the roots above, never forked.
+# Pinned, never a channel: the version ARGs are the only pin on the images too.
 ARG CERT_MANAGER_VER=v1.21.2
 RUN curl -fsSL \
       -o /etc/microshift/manifests.d/010-cert-manager/cert-manager.yaml \
@@ -13,6 +19,9 @@ RUN curl -fsSL \
       -o /etc/microshift/manifests.d/020-external-secrets/external-secrets.yaml \
       "https://github.com/external-secrets/external-secrets/releases/download/${EXTERNAL_SECRETS_VER}/external-secrets.yaml"
 
+# Embed what the manifests name, rendered, not a list kept beside them.
+# SERVICE_IMAGES is for an image no manifest names. && and the exit in the loop:
+# a `;` chain takes the last status and would hide a copy that failed earlier.
 ARG SERVICE_IMAGES=""
 RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
     images="$(/opt/microshift/manifest-images.sh \

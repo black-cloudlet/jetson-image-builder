@@ -261,8 +261,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   must not have replaced.
   **No `microshift-gitops`**: core Argo CD was installed here from the OpenShift GitOps channel
   and has been removed, so the subscription no longer needs that entitlement and the smoke test
-  no longer looks for its manifests. `ARG GITOPS_VER` is still in the file with nothing reading
-  it.
+  no longer looks for its manifests.
   Images are copied into the main store rather than referenced as an additional store, because
   an image upgrade overwrites an additional store (RHEL-75827). **No `dnf upgrade`**: Red Hat's
   own file runs one, but here it could pull a kernel past 5.14.0-687.42.1 and the Tegra kmod is

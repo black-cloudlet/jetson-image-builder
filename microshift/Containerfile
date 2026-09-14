@@ -1,18 +1,13 @@
-# Layer 3, microshift variant. MicroShift 4.20. The bound-images layer supplies
-# embed_image.sh and copy-embedded-images.service; services/ stacks the
-# application and model-serving images on top.
+# Layer 3, microshift variant: MicroShift 4.20 and the NVIDIA device plugin.
+# services/ stacks what runs on the cluster on top.
 ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-bound-images:latest
 FROM ${BASE_IMAGE}
 
-# rhocp and fast-datapath are entitlement-gated: the build runs in a
-# registered UBI container, or on a subscribed RHEL host where podman injects
-# entitlement. No `dnf upgrade` — it could pull a kernel past the one the Tegra
-# kmod is built against. --enablerepo avoids depending on dnf-plugins-core in
-# the base.
-# openshift-clients is `oc`: the microshift RPM ships no client at all, and
-# without it the node cannot inspect its own cluster.
+# Both repos are entitlement-gated; the build registers. No `dnf upgrade`: it
+# could pull a kernel the Tegra kmod cannot load against. --enablerepo rather
+# than config-manager, so dnf-plugins-core need not be in the base.
+# openshift-clients is `oc` — the microshift RPM ships no client.
 ARG USHIFT_VER=4.20
-ARG GITOPS_VER=1.19
 RUN dnf install -y \
         --enablerepo="rhocp-${USHIFT_VER}-for-rhel-9-$(uname -m)-rpms" \
         --enablerepo="fast-datapath-for-rhel-9-$(uname -m)-rpms" \
@@ -20,9 +15,8 @@ RUN dnf install -y \
     systemctl enable microshift && \
     dnf clean all
 
-# Trusted: pod CIDR and the host-endpoint IP are mandatory; the ClusterIP
-# service CIDR is not, but pods reach CoreDNS and the API server through it.
-# Public: 6443 is the MicroShift API, 443 the router's HTTPS.
+# Trusted: pod CIDR and host endpoint are mandatory, the service CIDR is how
+# pods reach CoreDNS and the API. Public: ssh, the router, the API.
 RUN firewall-offline-cmd --zone=trusted --add-source=10.42.0.0/16 && \
     firewall-offline-cmd --zone=trusted --add-source=10.43.0.0/16 && \
     firewall-offline-cmd --zone=trusted --add-source=169.254.169.1 && \
@@ -30,8 +24,7 @@ RUN firewall-offline-cmd --zone=trusted --add-source=10.42.0.0/16 && \
     firewall-offline-cmd --zone=public --add-port=443/tcp && \
     firewall-offline-cmd --zone=public --add-port=6443/tcp
 
-# OVN images need the root subtree shared. Skipped on bare metal, where systemd
-# has already done it.
+# OVN needs the root subtree shared; on bare metal systemd has already done it.
 COPY <<'EOF' /usr/lib/systemd/system/microshift-make-rshared.service
 [Unit]
 Description=Make root filesystem shared
@@ -57,13 +50,9 @@ Requires=copy-embedded-images.service
 After=copy-embedded-images.service
 EOF
 
-# CRI-O needs the NVIDIA runtime before a pod can request a GPU. MicroShift
-# applies the manifest through kustomize on first start.
+# CRI-O needs the NVIDIA runtime before a pod can ask for a GPU. Ask for the
+# .toml name: nvidia-ctk renames a .conf drop-in and still exits 0.
 ARG NVIDIA_DEVICE_PLUGIN_VER=v0.17.1
-# .toml, not .conf: nvidia-ctk rewrites a drop-in path to a .toml extension and
-# still exits 0, so asking for .conf silently produces a file by another name.
-# CRI-O walks crio.conf.d and reads every file whatever the extension, and 99-
-# still sorts after MicroShift's own 10- and 11- drop-ins.
 RUN nvidia-ctk runtime configure --runtime=crio --set-as-default \
         --config=/etc/crio/crio.conf.d/99-nvidia.toml
 
@@ -71,18 +60,18 @@ RUN mkdir -p /etc/microshift/manifests && \
     curl -fsSL -o /etc/microshift/manifests/nvidia-device-plugin.yml \
       "https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/${NVIDIA_DEVICE_PLUGIN_VER}/deployments/static/nvidia-device-plugin.yml"
 
-# Kustomization, time-slicing ConfigMap and the patch that mounts it. A patch,
-# not a fork: nvidia-device-plugin.yml above is curl'd from the release.
+# Kustomization, time-slicing ConfigMap and the patch that mounts it — the
+# upstream manifest above is patched, never forked.
 COPY microshift/manifests/ /etc/microshift/manifests/
 
-# Kept in the image so the smoke test can ask the same question the build did.
+# Kept in the image so the smoke test can ask what the build asked. services/
+# runs it from here too.
 COPY --chmod=0555 microshift/manifest-images.sh \
       /opt/microshift/manifest-images.sh
 
-# release-info lists the control plane only; the device plugin's image is named
-# nowhere but in the manifest that deploys it. The paths are the ones MicroShift
-# renders at start-up. && and the exit in the loop: a `;`
-# chain takes the last command's status, hiding a copy that failed earlier.
+# release-info lists the control plane only; the device plugin is named nowhere
+# but in the manifest that deploys it. The paths are the ones MicroShift renders
+# at start-up. && and the exit: a `;` chain would hide a copy that failed.
 RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
     images="$(jq -r '.images[]' /usr/share/microshift/release/release-"$(uname -m)".json)" && \
     images="${images} $(/opt/microshift/manifest-images.sh \

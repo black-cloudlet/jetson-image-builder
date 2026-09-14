@@ -6,42 +6,43 @@ image mode (aarch64), for deployment into a disconnected environment.
 The device OS is Red Hat's JetPack-for-RHEL bootc image (RHEL 9.8, JetPack 6.2.2 / L4T r36.5.0,
 kernel 5.14.0-687.42.1). Each **variant** is a directory deriving from it and layering on a
 Kubernetes distribution, with every container image embedded so the cluster starts with no
-registry reachable. There are two variants, `microshift/` and `k3s/`, built from the same two
-shared layers in `base/`. **`k3s/` is currently on hold**: the files are kept, but its workflow runs only on
-manual dispatch.
+registry reachable. One variant builds: `microshift/`. `k3s/` is
+still in the tree and reuses the same shared layers, but **nothing builds it** — its caller
+workflow was deleted, so reviving it starts with writing `build-k3s.yml` again.
 
 Every layer is published as `ghcr.io/black-cloudlet/jetson-orin-bootc-<layer>:<YYYYMMDD-sha8>`,
 and the finished variant also uploads an installer ISO as a workflow artifact.
 
 Each layer is pushed separately and builds on the previous one's digest — four for microshift,
-three for k3s. The two shared layers share the `base/` directory, as `Containerfile` and
-`Containerfile.bound-images`:
+three for k3s. The two shared layers share the `base/` directory, as `Containerfile.base` and
+`Containerfile.podman`:
 
 ```
 base           the pinned vendor image republished under our own name, nothing added
   |
-bound-images   the image-embedding machinery: the scripts and the boot-time unit
+bound-images   the image-embedding machinery, plus jtop
   |
 microshift   MicroShift 4.20 + NVIDIA device plugin + their images
   |            |
-  |          services   cert-manager + KServe (raw) + the Triton runtime + their images
+  |          services   cert-manager + External Secrets + their images
  or           |
-k3s          k3s + NVIDIA device plugin + their images
+k3s          k3s + NVIDIA device plugin + their images   (no workflow builds this)
   |
 ISO
 ```
 
-Application images sit **above** the variant layer, not below it: changing a model or a service
-image rebuilds `services` alone, and does not re-run the MicroShift RPM install or re-pull a
+Application images sit **above** the variant layer, not below it: changing a service image
+rebuilds `services` alone, and does not re-run the MicroShift RPM install or re-pull a
 nine-image control plane. Changing the MicroShift version rebuilds `microshift` and `services`
-but not `base` or `bound-images`. `k3s/` reuses both untouched, so the two variants share the
-vendor image and the embedding machinery; it has no services layer yet, because `services/`
-embeds into podman's containers-storage and writes `/etc/microshift/manifests.d`, and k3s reads
-neither.
+but not `base` or `bound-images`. `k3s/` would reuse both untouched; it has no services layer,
+because `services/` embeds into podman's containers-storage and writes
+`/etc/microshift/manifests.d`, and k3s reads neither.
 
 The two shared layers are two `Containerfile`s in one directory. Same directory because both are
 infrastructure under every variant rather than a variant of their own; separate images so the
-`base` digest stays a pure republish of what Red Hat ships.
+`base` digest stays a pure republish of what Red Hat ships. The file name and the image name
+differ: `Containerfile.podman` / `smoke-test.podman.sh` build the image published as
+`jetson-orin-bootc-bound-images`, from a CI job spelled `bound_images`.
 
 ## Embedded images
 
@@ -55,33 +56,30 @@ Each layer embeds its own: `microshift` takes MicroShift's control plane and the
 is a pod stuck in `ImagePullBackOff` on a disconnected node**, so both layers derive the list by
 rendering the manifests with kustomize (`microshift/manifest-images.sh`) rather than keeping one
 by hand, and `services/smoke-test.sh` re-runs the same scan against the finished cache. A
-registry-qualified reference is part of that: CRI-O resolves a short name like
-`kserve/storage-initializer` against `unqualified-search-registries` instead of looking in the
-local store first, so the smoke test rejects one. `SERVICE_IMAGES` is still there, for an image
-no manifest names.
+registry-qualified reference is part of that: CRI-O resolves a short name against
+`unqualified-search-registries` instead of looking in the local store first, so the smoke test
+rejects one. `SERVICE_IMAGES` is still there, for an image no manifest names.
 
 | Path | Does |
 | ---- | ---- |
-| `base/Containerfile` | the pinned JetPack-for-RHEL image, republished; adds nothing |
-| `base/smoke-test.sh` | checks the vendor image is still what CLAUDE.md says it is |
-| `base/Containerfile.bound-images` | `FROM` base + the physically-bound-images machinery, nothing else |
-| `base/smoke-test.bound-images.sh` | checks the machinery, and that no image was embedded in this layer |
-| `base/embed_image.sh` | build time: copy one image into the cache baked into the OS image |
-| `base/copy_embedded_images.sh` | boot time: replay that cache into containers-storage |
+| `base/Containerfile.base` | the pinned JetPack-for-RHEL image, republished; adds nothing |
+| `base/smoke-test.base.sh` | checks the vendor image is still what CLAUDE.md says it is |
+| `base/Containerfile.podman` | `FROM` base + the physically-bound-images machinery + jtop |
+| `base/smoke-test.podman.sh` | checks the machinery, and that no image was embedded in this layer |
+| `base/physically-bound-images/embed_image.sh` | build time: copy one image into the cache baked into the OS image |
+| `base/physically-bound-images/copy_embedded_images.sh` | boot time: replay that cache into containers-storage |
+| `base/physically-bound-images/copy-embedded-images.service` | the unit that runs it, once per boot |
 | `microshift/Containerfile` | `FROM` bound-images + MicroShift 4.20 + NVIDIA device plugin + their images |
+| `microshift/manifest-images.sh` | renders manifest roots and prints every image they name |
 | `microshift/config.toml` | bootc-image-builder config — the unattended kickstart and the ISO label |
 | `microshift/smoke-test.sh` | checks run inside the finished image before it is pushed |
-| `services/Containerfile` | `FROM` microshift + cert-manager, KServe, the Triton runtime and their images |
+| `services/Containerfile` | `FROM` microshift + cert-manager, External Secrets and their images |
 | `services/manifests/` | one kustomize root per component, applied by MicroShift at every start |
-| `services/smoke-test.sh` | renders every root, checks the patches still apply, the cluster layer underneath survived and the image cache is whole |
-| `k3s/Containerfile` | `FROM` bound-images + k3s + NVIDIA device plugin + their images |
-| `k3s/stage-assets.sh` | copies the baked-in images and manifests under `/var/lib/rancher` at boot |
-| `k3s/config.toml` | bootc-image-builder config — kickstart and ISO label for the k3s variant |
-| `k3s/smoke-test.sh` | checks run inside the finished image before it is pushed |
+| `services/smoke-test.sh` | renders every root, checks the patches took, the ratios hold and the cache is whole |
+| `k3s/*` | the k3s variant — still here, built by nothing |
 | `.github/workflows/build-image.yml` | reusable — builds and pushes one layer |
 | `.github/workflows/build-iso.yml` | reusable — turns a pushed image into an installer ISO |
-| `.github/workflows/build-microshift.yml` | caller — chains base → bound-images → microshift → services → ISO |
-| `.github/workflows/build-k3s.yml` | caller — chains base → bound-images → k3s → ISO; on hold, manual dispatch only |
+| `.github/workflows/build-microshift.yml` | the only caller — chains base → bound-images → microshift → services → ISO |
 
 The bound-images job is spelled `bound_images` in the callers: a hyphen in a job id makes
 `needs.bound-images` parse as a subtraction, which resolves to nothing instead of failing. The
@@ -97,32 +95,62 @@ the next one needs it sorts itself out.
 
 | root | what it is |
 |---|---|
-| `010-cert-manager` | upstream's static manifest, pinned by `CERT_MANAGER_VER`, unpatched. Installed only because KServe's webhooks need serving certificates — a self-signed issuer plus cainjector, no ACME, no external CA |
-| `020-kserve` | upstream `kserve.yaml`, pinned by `KSERVE_VER`, patched: `Standard` deployment mode (what KServe 0.20 calls raw), no Ingress creation, registry-qualified images, and three of upstream's four workloads deleted because MicroShift's `restricted-v2` SCC rejects them (a fixed `runAsUser`, a `hostPath`) and nothing here uses what they reconcile |
-| `030-triton-runtime` | one `ClusterServingRuntime`, `triton-igpu`: NVIDIA's Triton `-py3-igpu` build for Tegra, requesting one `nvidia.com/gpu` — one of the four time slices the device plugin publishes |
+| `010-cert-manager` | upstream's static manifest, pinned by `CERT_MANAGER_VER`. Three Deployments, no Helm and no `startupapicheck` Job. Patched only for resources |
+| `020-external-secrets` | upstream's static manifest, pinned by `EXTERNAL_SECRETS_VER`. Three Deployments, patched for resources and to drop the UID upstream pins |
 
 Both upstream installs are `curl`'d at build time, not vendored, and patched from the roots —
-never forked. `kserve-cluster-resources.yaml` is deliberately skipped: it carries fourteen
-serving runtimes and every image they name would have to be embedded.
+never forked. One patch file per Deployment: the kustomize inside `oc` is older than the
+standalone tool, and a multi-document patch file makes some of those versions panic. A patch
+that matches nothing fails the build, which is what catches a rename upstream.
 
-To add a component (PostgreSQL, RabbitMQ, the model), add a directory with a
-`kustomization.yaml`; the build embeds whatever images it renders. To build without Triton,
-delete `030-triton-runtime` — its image goes with it.
+**The UID.** External Secrets pins `runAsUser: 1000` on all three of its containers. MicroShift's
+`restricted-v2` SCC assigns a UID out of the namespace's `openshift.io/sa.scc.uid-range` and
+refuses a pod that names its own, so without the patch the Deployments are admitted and every
+pod they create is refused — a failure that shows up in `oc describe rs`, not in the Deployment.
+The patches delete the field; `runAsNonRoot: true` stays, so the SCC still only chooses *which*
+non-root UID.
 
-There is no Ingress by design: nothing on an air-gapped segment resolves a hostname, so a
-predictor is reached over its cluster-internal Service (or `oc port-forward`). An
-`InferenceService` wants `serving.kserve.io/autoscalerClass: none` unless this cluster grows a
-metrics-server, since raw mode's default autoscaler is an HPA.
+**Requests and limits**, on every container in both roots, to one rule: **memory request equals
+the limit (1:1), and the CPU limit is four times the request (1:4)**.
 
-Triton's igpu image is the largest thing in the pipeline and the embedded cache is paid for
-twice — once in `/usr`, once when it is replayed into containers-storage under `/var` — so check
-the `du -sh` the smoke test prints against the 40 GiB root before flashing.
+| root | Deployment | container | CPU req → limit | memory req = limit |
+|---|---|---|---|---|
+| `010` | `cert-manager` | `cert-manager-controller` | 50m → 200m | 128Mi |
+| `010` | `cert-manager-cainjector` | `cert-manager-cainjector` | 50m → 200m | 256Mi |
+| `010` | `cert-manager-webhook` | `cert-manager-webhook` | 25m → 100m | 64Mi |
+| `020` | `external-secrets` | `external-secrets` | 50m → 200m | 256Mi |
+| `020` | `external-secrets-webhook` | `webhook` | 25m → 100m | 128Mi |
+| `020` | `external-secrets-cert-controller` | `cert-controller` | 25m → 100m | 128Mi |
+
+Upstream ships almost none of this — cert-manager sets nothing at all, External Secrets sets
+`10m`/`32Mi` on one of its three — which makes every one of these pods BestEffort and the first
+thing evicted under pressure. Memory 1:1 means a pod is never evicted for growing past a request
+it was never going to stay under; it is OOM-killed at its own ceiling instead, which is a
+container problem rather than a node one. CPU 1:4 leaves burst room for the reconcile storm at
+start-up, and is why these stay Burstable rather than Guaranteed. The smoke test enforces the
+ratios by arithmetic over the render, so an edit cannot quietly break one; the sizes themselves
+are estimates and want a look under load.
+
+To add a component (PostgreSQL, RabbitMQ, whatever serves the model), add a numbered directory
+with a `kustomization.yaml`; the build embeds whatever images it renders.
+
+Two things are not settled. Everything External Secrets ships is pinned to namespace `default`,
+including the ClusterRoleBindings that name its ServiceAccounts, and nothing here creates a
+`SecretStore` or `ClusterSecretStore` — so it has no source to read from yet. And cert-manager
+was installed for KServe's webhook certificates; KServe is gone and External Secrets issues its
+own from `cert-controller`, so what still needs cert-manager is an open question.
+
+The embedded cache is paid for twice on the eMMC — once in `/usr`, once when it is replayed into
+containers-storage under `/var` — so check the `du -sh` the smoke test prints against the 40 GiB
+root before flashing.
 
 ## Adding a variant
 
 Create `<name>/` with a `Containerfile` (`FROM` the bound-images layer via an `ARG BASE_IMAGE`), a
-`config.toml` and a `smoke-test.sh`, then copy `build-microshift.yml` and point its top job and
-`iso` job at the new directory. The `base` and `bound-images` jobs are reused unchanged.
+`config.toml` and a `smoke-test.sh`, then copy `build-microshift.yml` and point its variant job
+and `iso` job at the new directory. The `base` and `bound_images` jobs are reused unchanged.
+That is also how the k3s variant comes back: everything under `k3s/` is still here, only its
+caller was deleted.
 
 Nothing in the reusable workflows is MicroShift-specific: layer-shaped checks live in each
 layer's own `smoke-test.sh`, and the kickstart in the variant's own `config.toml` — MicroShift's
@@ -140,9 +168,9 @@ L4T line as the image built here — before a device can boot this ISO.
 |---|---|
 | `RH_REGISTRY_USER` / `RH_REGISTRY_PASSWORD` | pull `registry.redhat.io/rhel9/bootc-image-builder` |
 | `RHSM_USERNAME` / `RHSM_PASSWORD` | Red Hat account — both jobs register with subscription-manager for the MicroShift RPMs and bib's Anaconda depsolve |
-| `OPENSHIFT_PULL_SECRET` | pull secret JSON from console.redhat.com/openshift/install/pull-secret — pulls MicroShift's and the device plugin's container images at build time. The services layer's images (`quay.io/jetstack`, `docker.io/kserve`, `nvcr.io/nvidia`) are public and pulled anonymously |
-| `JETSON_SSH_PUBKEY` | public key for the `jetson` user |
-| `JETSON_PASSWORD_HASH` | `openssl passwd -6` output for the `jetson` user — the hash, not the password |
+| `OPENSHIFT_PULL_SECRET` | pull secret JSON from console.redhat.com/openshift/install/pull-secret — pulls MicroShift's and the device plugin's container images at build time. The services layer's images (`quay.io/jetstack`, `oci.external-secrets.io`) are public and pulled anonymously |
+| `JETSON_SSH_PUBKEY` | public key for the `cloudlet` user |
+| `JETSON_PASSWORD_HASH` | `openssl passwd -6` output for the `cloudlet` user — the hash, not the password |
 
 Both `JETSON_*` secrets are validated before bib runs: unset, empty, multi-line, or a plaintext
 password where a `$6$salt$hash` is expected fails the ISO job at the render step. The kickstart
@@ -152,9 +180,10 @@ empty one an account with no password at all — neither is visible until the IS
 Entitlement comes from registering inside the build container, not from a certificate tarball —
 nothing expires in a secret, and `redhat.repo` is generated fresh by the registration. Each run
 job registers and releases the slot again in an `if: always()` unregister step — every job,
-including the two that install no RPMs, so that all layers share one code path. The
+including `base`, which installs nothing at all, so that all layers share one code path. The
 subscription has to carry an OpenShift entitlement or `rhocp-4.20-for-rhel-9-aarch64-rpms` never
-appears and the build fails at `--enablerepo`.
+appears and the build fails at `--enablerepo`. The bound-images layer needs the plain RHEL repos
+too, since it installs `python3`/`python3-pip` for jtop.
 
 Three things to know about registering with an account password. It is a broader credential than
 an organisation ID plus activation key, which can only attach subscriptions — if it leaks, so
@@ -172,20 +201,22 @@ secret — kept separate so `RH_REGISTRY_*` can hold a narrow Registry Service A
 ## Install
 
 The kickstart in `microshift/config.toml` is fully unattended: it wipes the on-board eMMC
-`mmcblk0` only (the USB key and any fitted NVMe are ignored), creates `jetson` in `wheel`, locks
-root, and reboots ejecting the media. Booting it on a devkit whose eMMC still holds the factory
+`mmcblk0` only (the USB key and any fitted NVMe are ignored), creates `cloudlet` in `wheel`,
+locks root, and reboots ejecting the media. Booting it on a devkit whose eMMC still holds the factory
 L4T install is destructive — that is the point, but there is no confirmation prompt.
 
-The network is **static**: the device comes up as `Jetson` on `192.168.1.10/24` via
-`192.168.1.1`. Every device imaged from a given ISO gets that same address and hostname, so a
-second node on the same segment collides — change them here and rebuild, or fix up per device
-after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UTC.
+The network is **static**: the device comes up as `jetson-1` on `192.168.1.1/24` via
+`192.168.1.254`, on `eth0`, with search domain `example.com` and no nameserver — the segment has
+no resolver, so that suffix has nothing to resolve against. Every device imaged from a given ISO
+gets the same address and hostname, so a second node on the same segment collides — change them
+here and rebuild, or fix up per device after the first boot. Timezone is `Asia/Jerusalem` with
+the hardware clock in UTC.
 
 1. Flash QSPI on the station from a **R36.5.x** BSP (same L4T line as the image):
    `sudo ./flash.sh p3737-0000-p3701-0000-qspi external`
 2. `dd` the ISO to a USB key, plug it in, ESC at the NVIDIA logo, pick USB. Pull any SD card
    first, so the eMMC cannot enumerate as anything but `mmcblk0`.
-3. Wait for the reboot, then over serial (`ttyTCU0`) or `ssh jetson@192.168.1.10`:
+3. Wait for the reboot, then over serial (`ttyTCU0`) or `ssh cloudlet@192.168.1.1`:
    ```
    bootc status
    cat /etc/nv_tegra_release
@@ -206,6 +237,8 @@ after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in UT
    sudo -E oc get sc                      # topolvm provisioner
    sudo -E oc get ds -n kube-system nvidia-device-plugin-daemonset
    sudo -E oc get nodes -o jsonpath='{.items[0].status.allocatable}'   # expect nvidia.com/gpu
+   sudo -E oc get pods -n cert-manager     # three, Running
+   sudo -E oc get pods -A | grep external-secrets
    ```
    Pods stuck in `ImagePullBackOff` mean the embedding did not take — check
    `/usr/lib/containers-image-cache/mapping.txt` and
@@ -223,14 +256,14 @@ The default kubeconfig points at loopback, so an SSH tunnel matches the serving 
 generated and needs no change on the device:
 
 ```bash
-ssh -N -L 6443:127.0.0.1:6443 jetson@192.168.1.10 &
-ssh jetson@192.168.1.10 sudo cat /var/lib/microshift/resources/kubeadmin/kubeconfig > ~/.kube/jetson
+ssh -N -L 6443:127.0.0.1:6443 cloudlet@192.168.1.1 &
+ssh cloudlet@192.168.1.1 sudo cat /var/lib/microshift/resources/kubeadmin/kubeconfig > ~/.kube/jetson
 KUBECONFIG=~/.kube/jetson oc get pods -A
 ```
 
-Talking to `192.168.1.10:6443` directly needs that address *in* the serving certificate — copying
+Talking to `192.168.1.1:6443` directly needs that address *in* the serving certificate — copying
 the loopback kubeconfig and editing its `server:` line fails with `x509: certificate is valid for
-localhost, ... not 192.168.1.10`. MicroShift writes one kubeconfig per name the certificate
+localhost, ... not 192.168.1.1`. MicroShift writes one kubeconfig per name the certificate
 covers under `/var/lib/microshift/resources/kubeadmin/`: the flat file for loopback, then
 `<name>/kubeconfig` for the node hostname and for every `apiServer.subjectAltNames` entry.
 `sudo ls` that directory to see which names you got. To add the address, create
@@ -239,12 +272,12 @@ covers under `/var/lib/microshift/resources/kubeadmin/`: the flat file for loopb
 ```yaml
 apiServer:
   subjectAltNames:
-    - 192.168.1.10
+    - 192.168.1.1
 ```
 
-then `sudo systemctl restart microshift` and copy `192.168.1.10/kubeconfig` off the node — its
-`server:` already names the address. The hostname file (`Jetson/kubeconfig`) works as well, but
-the kickstart sets no `--nameserver`, so the client needs `192.168.1.10 Jetson` in its own
+then `sudo systemctl restart microshift` and copy `192.168.1.1/kubeconfig` off the node — its
+`server:` already names the address. The hostname file (`jetson-1/kubeconfig`) works as well, but
+the kickstart sets no `--nameserver`, so the client needs `192.168.1.1 jetson-1` in its own
 `/etc/hosts`. None of this is baked into the image: the address is per device and still an open
 question (see CLAUDE.md).
 
@@ -277,8 +310,9 @@ somewhere to live. Filling the VG would leave the cluster with no dynamic provis
 
 The budget: ~58 GiB of eMMC user area, ~1.6 GiB of it spent on the ESP and `/boot`, ~56.5 GiB in
 the VG, 40 GiB root, **~16.5 GiB free for PVCs**. The root figure is set by what has to fit in it —
-~10 GB of embedded images in `/usr`, the copy `copy-embedded-images.service` replays into
-`/var/lib/containers`, and a second deployment staged by `bootc upgrade`. xfs grows but never
+the embedded images in `/usr` — MicroShift's control plane, the device plugin, cert-manager and
+External Secrets — the copy `copy-embedded-images.service` replays into `/var/lib/containers`,
+and a second deployment staged by `bootc upgrade`. xfs grows but never
 shrinks, so an undersized root is the recoverable mistake. Confirm the exact device size with
 `lsblk -bdno SIZE /dev/mmcblk0` before trusting the free-space figure.
 
@@ -296,15 +330,14 @@ that alone overran the disk.
 
 ## Local build (subscribed RHEL 9 aarch64 host)
 
-The MicroShift layer needs entitlement, so this does not work on an unsubscribed host. On a
-registered host podman injects the entitlement itself, so only the pull secret has to be
-passed — and the two shared layers need neither:
+Everything above `base` needs entitlement, so this does not work on an unsubscribed host. On a
+registered host podman injects it, so only the pull secret has to be passed:
 
 ```
-sudo podman build -t localhost/jetson-orin-bootc-base:dev -f base/Containerfile .
+sudo podman build -t localhost/jetson-orin-bootc-base:dev -f base/Containerfile.base .
 sudo podman build \
   --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-base:dev \
-  -t localhost/jetson-orin-bootc-bound-images:dev -f base/Containerfile.bound-images .
+  -t localhost/jetson-orin-bootc-bound-images:dev -f base/Containerfile.podman .
 sudo podman build \
   --secret id=pullsecret,src=$HOME/pull-secret.json \
   --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-bound-images:dev \
