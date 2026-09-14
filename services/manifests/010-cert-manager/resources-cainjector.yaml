@@ -1,0 +1,21 @@
+# Ratios and reasoning as in resources-controller.yaml. Twice the memory: the
+# cainjector caches every object it injects a CA into, and it is the one of the
+# three that grows with the number of CRDs and webhook configurations on the
+# node rather than staying flat.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cert-manager-cainjector
+  namespace: cert-manager
+spec:
+  template:
+    spec:
+      containers:
+        - name: cert-manager-cainjector
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi

@@ -1,0 +1,22 @@
+# Same two changes as controller.yaml, and the same reasons. Container name is
+# `webhook`, not the Deployment's name — the strategic merge is keyed on it, so
+# a rename upstream makes this patch match nothing and fail the build.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: external-secrets-webhook
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+        - name: webhook
+          securityContext:
+            runAsUser: null
+          resources:
+            requests:
+              cpu: 25m
+              memory: 128Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

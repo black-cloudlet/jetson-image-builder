@@ -1,4 +1,15 @@
+# cert-manager.yaml is not in git: the Containerfile curls it in, pinned by
+# CERT_MANAGER_VER. Patched from here, never forked.
+#
+# One patch per file and one resource per patch: the kustomize inside oc is
+# older than the standalone tool and a multi-document patch file makes some of
+# those versions panic. A patch that matches nothing fails the build, which is
+# what catches a rename upstream.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - cert-manager.yaml
+patches:
+  - path: resources-controller.yaml
+  - path: resources-cainjector.yaml
+  - path: resources-webhook.yaml

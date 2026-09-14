@@ -4,15 +4,13 @@
 ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-bound-images:latest
 FROM ${BASE_IMAGE}
 
-# rhocp, fast-datapath and gitops are entitlement-gated: the build runs in a
+# rhocp and fast-datapath are entitlement-gated: the build runs in a
 # registered UBI container, or on a subscribed RHEL host where podman injects
 # entitlement. No `dnf upgrade` — it could pull a kernel past the one the Tegra
 # kmod is built against. --enablerepo avoids depending on dnf-plugins-core in
 # the base.
 # openshift-clients is `oc`: the microshift RPM ships no client at all, and
 # without it the node cannot inspect its own cluster.
-# microshift-gitops is core Argo CD as manifests under
-# /usr/lib/microshift/manifests.d, from the GitOps channel rather than rhocp.
 ARG USHIFT_VER=4.20
 ARG GITOPS_VER=1.19
 RUN dnf install -y \
