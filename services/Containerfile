@@ -4,7 +4,6 @@ FROM ${BASE_IMAGE}
 COPY services/manifests/ /etc/microshift/manifests.d/
 
 ARG CERT_MANAGER_VER=v1.21.2
-ARG KSERVE_VER=v0.20.0
 RUN curl -fsSL \
       -o /etc/microshift/manifests.d/010-cert-manager/cert-manager.yaml \
       "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VER}/cert-manager.yaml" && \

@@ -23,7 +23,7 @@ jobs:
     with:
       name: base
       containerfile: base/Containerfile.base
-      smoke-test: base/smoke-test.sh
+      smoke-test: base/smoke-test.base.sh
     secrets: inherit
     permissions: { contents: read, packages: write }
 
