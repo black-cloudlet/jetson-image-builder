@@ -79,9 +79,9 @@ COPY microshift/manifests/ /etc/microshift/manifests/
 COPY --chmod=0555 microshift/manifest-images.sh \
       /opt/microshift/manifest-images.sh
 
-# release-info lists the control plane only; the device plugin's image and Argo
-# CD's are named nowhere but in the manifests that deploy them. The paths are
-# the ones MicroShift renders at start-up. && and the exit in the loop: a `;`
+# release-info lists the control plane only; the device plugin's image is named
+# nowhere but in the manifest that deploys it. The paths are the ones MicroShift
+# renders at start-up. && and the exit in the loop: a `;`
 # chain takes the last command's status, hiding a copy that failed earlier.
 RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
     images="$(jq -r '.images[]' /usr/share/microshift/release/release-"$(uname -m)".json)" && \
