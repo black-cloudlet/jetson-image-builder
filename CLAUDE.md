@@ -301,7 +301,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
 - `microshift/config.toml` — bib config with a **custom kickstart** (bib then adds only `ostreecontainer`;
   `[customizations.user]`/`filesystem` cannot be combined with a custom kickstart, so
   everything lives in the kickstart): `text --non-interactive`, `timezone Asia/Jerusalem --utc`,
-  static `192.168.1.10/24` gw `192.168.1.1` on link with `--hostname=Jetson`, `ignoredisk
+  static `192.168.1.10/24` gw `192.168.1.254` on `eth0` with `--hostname=jetson-1`, `ignoredisk
   --only-use=mmcblk0`, `clearpart --all` + `reqpart --add-boot` + one VG `rhel` on the rest of
   the eMMC holding a 40 GiB xfs root and **no swap**, **with the remaining ~16.5 GiB of extents
   left free for MicroShift's LVMS provisioner** (fill the VG and the cluster has no dynamic PV
@@ -309,8 +309,9 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   locked, user `jetson` in `wheel` from `@JETSON_SSH_PUBKEY@` /
   `@JETSON_PASSWORD_HASH@` placeholders, `reboot --eject`. ISO label `JETSON_ORIN_BOOTC`.
   The static address and hostname are baked into the ISO: two devices imaged from the same ISO
-  collide on one segment. `--nameserver` is deliberately absent — the network is air-gapped and
-  there is no resolver to point at.
+  collide on one segment. `--nameserver=192.168.1.1`, same in `k3s/config.toml`; it must answer,
+  because an unreachable resolver blocks every lookup for the glibc timeout instead of failing
+  at once.
 - `.github/workflows/build-image.yml` — **reusable**: register, bind container storage onto the
   runner's disk so podman gets native overlay, write the
   pull secret, build the given Containerfile with the repo root as context, run the given
@@ -381,7 +382,7 @@ hardware as of this writing.
 
 Open decisions to confirm with the maintainer before implementing: whether to keep the
 entitlement-secret approach or stand up a self-hosted RHEL runner; whether the static
-192.168.1.10 / hostname `Jetson` baked into the ISO becomes per-device before a second node
+192.168.1.10 / hostname `jetson-1` baked into the ISO becomes per-device before a second node
 joins the air-gapped network; how the service images reach k3s's containerd, given that a second copy as
 `docker-archive` would put every application layer in `/usr` twice, and that k3s therefore
 needs its own services layer rather than a share of `services/`; and whether the k3s node's
