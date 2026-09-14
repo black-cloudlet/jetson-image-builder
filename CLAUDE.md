@@ -258,6 +258,29 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   not handle. The unit deliberately does **not** want `network-online.target`: the copy is
   local-disk only and waiting for a carrier that never comes would add
   NetworkManager-wait-online's timeout to every boot.
+  Two things keep the cache from costing more than it has to. The copy is
+  `--multi-arch=system`, not `all`: the builder is native aarch64 and so is the node, so every
+  other platform in a manifest list is dead weight — the device plugin now, application images
+  later, where a docker.io manifest list can carry six platforms. A reference pinned to a
+  manifest-list digest still resolves on the node even though only one architecture was stored
+  under it, because containers-storage looks an image up by its explicit name before it looks by
+  digest (`storage/storage_reference.go:114-121`), and that name is what the copy recorded.
+  Deduplicating the cache itself was
+  tried and removed: the `dir:` transport names each blob after its digest, so a layer two
+  embedded images share is the same file twice and hardlinking them is easy — but it frees
+  nothing on the node, because `/usr` is an ostree checkout and stores by content, so those two
+  files are already one object there. Only the layer tar carries both copies, so what it would
+  buy is ISO size and upgrade bandwidth, and neither was the problem. And `copy_embedded_images.sh`
+  removes images an earlier version of the OS image put in containers-storage and this one no
+  longer names, recording what it applied in `/var/lib/physically-bound-images/applied.txt`
+  (containers-storage is machine state, the cache is not, so nothing else remembers). Nothing
+  else prunes that store: the first thing that would is kubelet's image GC at 85% of the root
+  filesystem, and what it deletes is exactly the physically-bound images, on a node with no
+  registry to pull them back from. The prune runs **before** the copy, so a superseded set frees
+  space for its replacement; an image CRI-O still holds through a container from the previous
+  boot cannot be removed yet, so that entry stays on the list and the next boot tries again
+  instead of losing track of it. A removal that fails is logged, never fatal — the unit is
+  `Requires=`d by microshift.service.
 - `k3s/Containerfile` — `FROM` the bound-images layer via `ARG BASE_IMAGE`, then k3s (pinned
   `K3S_VERSION`, default `v1.36.4+k3s1`) as the `k3s-arm64` static binary into `/usr/bin/k3s`
   with the usual `kubectl`/`crictl`/`ctr` argv[0] symlinks — `/usr/local` is machine state on

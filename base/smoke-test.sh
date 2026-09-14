@@ -12,7 +12,17 @@ rpm -q nvidia-jetpack-for-rhel-9.8-kmod nvidia-container-toolkit-base
 ls /usr/lib/modules/*/extra/drivers/gpu/nvgpu/nvgpu.ko
 
 # skopeo is used by embed_image.sh at build time and by copy_embedded_images.sh
-# at boot; it comes from the vendor image rather than being installed.
+# at boot; podman by the latter, to drop a superseded image set. Both come from
+# the vendor image rather than being installed.
 command -v skopeo
+command -v podman
+
+# Root is on an LV in both kickstarts, and MicroShift's LVMS shells out to vgs,
+# only warning when it is missing. Nothing here installs lvm2; the microshift
+# RPM does not even require it.
+rpm -q lvm2
+for cmd in lvm vgs; do
+	command -v "$cmd" || { echo "missing: $cmd, from lvm2"; exit 1; }
+done
 
 echo "all checks passed"
