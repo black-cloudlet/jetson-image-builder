@@ -325,9 +325,13 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   microshift.service, rather than Red Hat's `ExecStartPre=` — it runs once per boot instead of
   on every MicroShift restart, and later app images share the one mechanism). `embed_image.sh`
   splits `$REPO:$TAG@sha256:$SHA` references, which skopeo rejects and Red Hat's own recipe does
-  not handle. The unit deliberately does **not** want `network-online.target`: the copy is
-  local-disk only and waiting for a carrier that never comes would add
-  NetworkManager-wait-online's timeout to every boot.
+  not handle, and is idempotent: a reference whose `manifest.json` is already in the cache exits
+  0 without copying. Callers concatenate lists that nothing dedupes across — release-info plus
+  the manifest scan in the microshift layer, that scan plus `SERVICE_IMAGES` in `services/` —
+  and a second copy of a reference already embedded **one layer down** would ship both, since
+  the write is a copy-up and overlay keeps what it copied from. The unit deliberately does
+  **not** want `network-online.target`: the copy is local-disk only and waiting for a carrier
+  that never comes would add NetworkManager-wait-online's timeout to every boot.
 - `k3s/Containerfile` — `FROM` the bound-images layer via `ARG BASE_IMAGE`, then k3s (pinned
   `K3S_VERSION`, default `v1.36.4+k3s1`) as the `k3s-arm64` static binary into `/usr/bin/k3s`
   with the usual `kubectl`/`crictl`/`ctr` argv[0] symlinks — `/usr/local` is machine state on

@@ -18,6 +18,19 @@ additional_copy_args=("${@:2}")
 
 fsha="$(echo "$image" | sha256sum | awk '{ print $1 }')"
 
+# The same reference arriving twice is a second copy of every blob, and if the
+# first copy was made in a lower layer both of them ship in the image: the write
+# is a copy-up, and overlay keeps what it copied from. Callers build their lists
+# by concatenation — release-info plus the manifest scan, that scan plus
+# SERVICE_IMAGES — and none of them dedupe across the seam, so the embed is
+# idempotent here rather than in each caller. Keyed on manifest.json because
+# skopeo writes it after the blobs: a copy interrupted half way leaves the
+# directory behind but not that file, and is redone rather than trusted.
+if [[ -f "$CACHE_DIR/$fsha/manifest.json" ]]; then
+	echo "already embedded: $image"
+	exit 0
+fi
+
 src=$image
 dst=$image
 
