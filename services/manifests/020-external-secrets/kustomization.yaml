@@ -1,0 +1,15 @@
+# external-secrets.yaml is not in git: the Containerfile curls it in, pinned by
+# EXTERNAL_SECRETS_VER. Patched from here, never forked — it is 1.5 MB, most of
+# it CRDs.
+#
+# Each patch drops the runAsUser upstream pins and adds requests and limits;
+# one file per Deployment, for the reason given in 010-cert-manager's
+# kustomization.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - external-secrets.yaml
+patches:
+  - path: controller.yaml
+  - path: webhook.yaml
+  - path: cert-controller.yaml

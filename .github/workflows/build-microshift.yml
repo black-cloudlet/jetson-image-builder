@@ -18,12 +18,15 @@ on:
 
 jobs:
   # The pinned vendor image, republished. Shared by every variant.
+  # `stable` on every layer so the four images can be mirrored as one set; the
+  # OpenShift version tag goes only on the layers that contain MicroShift.
   base:
     uses: ./.github/workflows/build-image.yml
     with:
       name: base
-      containerfile: base/Containerfile
-      smoke-test: base/smoke-test.sh
+      containerfile: base/Containerfile.base
+      smoke-test: base/smoke-test.base.sh
+      extra-tags: stable
     secrets: inherit
     permissions: { contents: read, packages: write }
 
@@ -36,12 +39,17 @@ jobs:
     uses: ./.github/workflows/build-image.yml
     with:
       name: bound-images
-      containerfile: base/Containerfile.bound-images
-      smoke-test: base/smoke-test.bound-images.sh
+      containerfile: base/Containerfile.podman
+      smoke-test: base/smoke-test.podman.sh
       build-args: BASE_IMAGE=${{ needs.base.outputs.image-ref }}
+      extra-tags: stable
     secrets: inherit
     permissions: { contents: read, packages: write }
 
+  # USHIFT_VER is passed to the build and used as a tag from the same two lines:
+  # a 4.20 tag on an image built from another channel would be a claim nothing
+  # enforces. The env context is not available to a reusable workflow's `with:`,
+  # so it is written twice rather than once — keep them together.
   microshift:
     needs: bound_images
     uses: ./.github/workflows/build-image.yml
@@ -49,12 +57,16 @@ jobs:
       name: microshift
       containerfile: microshift/Containerfile
       smoke-test: microshift/smoke-test.sh
-      build-args: BASE_IMAGE=${{ needs.bound_images.outputs.image-ref }}
+      build-args: |
+        BASE_IMAGE=${{ needs.bound_images.outputs.image-ref }}
+        USHIFT_VER=4.20
+      extra-tags: stable 4.20
     secrets: inherit
     permissions: { contents: read, packages: write }
 
-  # Application and model-serving images, on top of the cluster rather than
-  # under it. Empty until the first component lands.
+  # What runs on the cluster — cert-manager, External Secrets — on top of the
+  # cluster layer rather than under it, so a service changing does not re-run
+  # the MicroShift install.
   services:
     needs: microshift
     uses: ./.github/workflows/build-image.yml
@@ -63,6 +75,9 @@ jobs:
       containerfile: services/Containerfile
       smoke-test: services/smoke-test.sh
       build-args: BASE_IMAGE=${{ needs.microshift.outputs.image-ref }}
+      # Built FROM the microshift layer, so it carries that MicroShift version
+      # too — and this is the image a node actually boots and upgrades.
+      extra-tags: stable 4.20
     secrets: inherit
     permissions: { contents: read, packages: write }
 

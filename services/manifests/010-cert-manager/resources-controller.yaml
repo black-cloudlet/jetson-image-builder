@@ -1,0 +1,31 @@
+# Upstream ships no resources on any of the three Deployments, so every
+# cert-manager pod is BestEffort — the first thing the kubelet evicts under
+# pressure, on a node where the whole reason cert-manager is installed is that
+# webhook serving certificates have to exist before anything else admits.
+#
+# Memory request equals limit (1:1): the pod is then never evicted for growing
+# past a request it was never going to stay under — it is OOM-killed at its own
+# ceiling instead, which is a container problem rather than a node one. CPU
+# limit is four times the request (1:4), which leaves burst room for the
+# reconcile storm at start-up without one controller holding the cores.
+#
+# Note this leaves the pods Burstable, not Guaranteed: Guaranteed needs every
+# container's CPU request to equal its limit too, which is exactly the burst
+# room the 1:4 ratio is there to keep.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  template:
+    spec:
+      containers:
+        - name: cert-manager-controller
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi

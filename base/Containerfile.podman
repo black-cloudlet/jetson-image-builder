@@ -1,0 +1,28 @@
+# Layer 2, shared: the image-embedding machinery and jtop. The images it replays
+# are embedded by the layers above — never here, where every variant pays.
+ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-base:latest
+FROM ${BASE_IMAGE}
+
+# --prefix=/usr: /usr/local is machine state on bootc and would not survive.
+ARG JTOP_VER=7.2.1
+RUN dnf install -y python3 python3-pip && \
+    pip3 install --prefix=/usr --no-cache-dir "jetson-stats==${JTOP_VER}" && \
+    dnf clean all
+
+# The group jetson-stats grants jtop access through.
+RUN groupadd -r jtop
+
+# From redhat-et/edge-ai-image-pipelines (Apache-2.0). The cache is a plain
+# directory: an image upgrade overwrites an additional store (RHEL-75827).
+COPY --chmod=0555 base/physically-bound-images/embed_image.sh \
+      /opt/physically-bound-images/embed_image.sh
+COPY --chmod=0555 base/physically-bound-images/copy_embedded_images.sh \
+      /opt/physically-bound-images/copy_embedded_images.sh
+
+# Replays the cache into containers-storage once per boot. No network-online:
+# the copy is local-disk only.
+COPY --chmod=0644 base/physically-bound-images/copy-embedded-images.service \
+      /usr/lib/systemd/system/copy-embedded-images.service
+RUN systemctl enable copy-embedded-images.service
+
+RUN bootc container lint

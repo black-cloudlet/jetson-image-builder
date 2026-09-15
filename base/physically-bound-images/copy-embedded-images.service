@@ -1,0 +1,12 @@
+[Unit]
+Description=Copy embedded container images into containers-storage
+Wants=basic.target
+After=basic.target local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/physically-bound-images/copy_embedded_images.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

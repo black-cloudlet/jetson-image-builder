@@ -1,0 +1,23 @@
+# Same two changes as controller.yaml. This is the half of External Secrets
+# that issues the webhook's own serving certificate — it does not use
+# cert-manager for it — so it runs once at start-up and then renews; the
+# smallest CPU request of the three, with the same burst room.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: external-secrets-cert-controller
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+        - name: cert-controller
+          securityContext:
+            runAsUser: null
+          resources:
+            requests:
+              cpu: 25m
+              memory: 128Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

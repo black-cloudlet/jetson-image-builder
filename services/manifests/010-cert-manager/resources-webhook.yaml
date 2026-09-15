@@ -1,0 +1,21 @@
+# Ratios and reasoning as in resources-controller.yaml. The smallest of the
+# three: it serves admission requests and holds no cache of its own, but it is
+# in the request path for every serving-certificate write, so the CPU limit
+# still has to leave room to answer a burst.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cert-manager-webhook
+  namespace: cert-manager
+spec:
+  template:
+    spec:
+      containers:
+        - name: cert-manager-webhook
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi

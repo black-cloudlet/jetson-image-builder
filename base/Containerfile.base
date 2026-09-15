@@ -1,0 +1,6 @@
+# Layer 1, shared: the vendor image republished under a name we control.
+# Pinned, never a floating tag — the Tegra kmod is tied to this kernel build.
+ARG BASE=quay.io/redhat-user-workloads/jetpack-for-rhel-tenant/rhel-98-bootc:6.2.2_5.14.0-687.42.1_090326003719
+FROM ${BASE}
+
+RUN bootc container lint
