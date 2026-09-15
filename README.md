@@ -218,7 +218,7 @@ locks root, and reboots ejecting the media. Booting it on a devkit whose eMMC st
 L4T install is destructive — that is the point, but there is no confirmation prompt.
 
 The network is **static**: the device comes up as `jetson-1` on `192.168.1.10/24` via
-`192.168.1.254`, on `eth0`, with `192.168.1.1` as its resolver and `example.com` as the search
+`192.168.1.254`, on `eth0`, with `192.168.1.1` as its resolver and `cloudlet.local` as the search
 domain. That resolver has to answer — an unreachable one blocks every lookup for the glibc
 timeout rather than failing at once. Every device imaged from a given ISO gets the same address
 and hostname, so a second node on the same segment collides — change them here and rebuild, or

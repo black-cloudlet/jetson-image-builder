@@ -378,7 +378,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   `ostreecontainer`; `[customizations.user]`/`filesystem` cannot be combined with a custom
   kickstart, so everything lives in the kickstart): `text --non-interactive`,
   `timezone Asia/Jerusalem --utc`, static `192.168.1.10/24` gw `192.168.1.254` on `eth0` with
-  `--nameserver=192.168.1.1`, `--domain=example.com` and `--hostname=jetson-1`,
+  `--nameserver=192.168.1.1`, `--domain=cloudlet.local` and `--hostname=jetson-1`,
   `ignoredisk --only-use=mmcblk0`,
   `clearpart --all` + `reqpart --add-boot` + one VG `rhel` on the rest of the eMMC holding a
   40 GiB xfs root and **no swap**, **with the remaining ~16.5 GiB of extents left free for
@@ -387,7 +387,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   `wheel` from `@JETSON_SSH_PUBKEY@` / `@JETSON_PASSWORD_HASH@` placeholders, `reboot --eject`.
   ISO label `JETSON_ORIN_BOOTC`. The address and hostname are baked into the ISO: two devices
   imaged from the same ISO collide on one segment. `--nameserver=192.168.1.1` and
-  `--domain=example.com`, the same in `k3s/config.toml`; the resolver must answer, because an
+  `--domain=cloudlet.local`, the same in `k3s/config.toml`; the resolver must answer, because an
   unreachable one blocks every lookup for the glibc timeout instead of failing at once.
 - `.github/workflows/build-image.yml` — **reusable**: register, bind container storage onto the
   runner's disk so podman gets native overlay, write the
@@ -503,8 +503,7 @@ namespaced objects to `default`, and which provider it reads from on a disconnec
 whether the NVMe upgrade in decision 3 happens before real application images and a model store
 land on the node; whether to keep the entitlement-secret approach or stand up a self-hosted RHEL
 runner; whether the static `192.168.1.10` / hostname `jetson-1` baked into the ISO becomes
-per-device before a second node joins the air-gapped network, and whether `example.com` is the
-search domain that segment actually uses; whether the k3s node's kubeconfig
+per-device before a second node joins the air-gapped network; whether the k3s node's kubeconfig
 (`/etc/rancher/k3s/k3s.yaml`, root-only) should be opened to the `cloudlet` user the way
 `openshift-clients` opens the microshift one; whether the k3s
 variant comes back at all, and if so how service images reach k3s's containerd, given that a
