@@ -156,6 +156,13 @@ jobs:
             --secret id=pullsecret,src=/tmp/pull-secret.json \
             -f "${{ inputs.containerfile }}" .
 
+      # Roughly what the deployment occupies on the node — the number the root LV
+      # is sized against. Per layer, so the differences say where the bytes went.
+      - name: Image size
+        run: |
+          bytes=$(podman image inspect --format '{{.Size}}' "$IMAGE:${{ steps.meta.outputs.tag }}")
+          echo "::notice title=${{ inputs.name }} image size::$((bytes / 1048576)) MiB ($bytes bytes)"
+
       - name: Smoke test
         run: podman run --rm -i "$IMAGE:${{ steps.meta.outputs.tag }}" bash -s < "${{ inputs.smoke-test }}"
 

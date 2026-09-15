@@ -202,7 +202,10 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
 
 - `base/Containerfile.base` — `FROM` the pinned JetPack-for-RHEL image and nothing else, plus
   `bootc container lint`. Republished as `jetson-orin-bootc-base`. The only layer that installs
-  nothing at all.
+  nothing at all, so its smoke test is really about the vendor image: it asserts `skopeo` and
+  `podman` (the embedding machinery needs both) and `lvm2` — root is on an LV in both
+  kickstarts and MicroShift's LVMS shells out to `vgs`, only warning when it is missing, and
+  nothing here installs it.
 - `base/Containerfile.podman` — `FROM` that via `ARG BASE_IMAGE`. Published as
   `jetson-orin-bootc-bound-images` (file name and image name differ; see decision 7). Two
   things:
@@ -233,6 +236,28 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   the write is a copy-up and overlay keeps what it copied from. The unit deliberately does
   **not** want `network-online.target`: the copy is local-disk only and waiting for a carrier
   that never comes would add NetworkManager-wait-online's timeout to every boot.
+  Two things keep the cache from costing more than it has to. The copy is
+  `--multi-arch=system`, not `all`: the builder is native aarch64 and so is the node, so every
+  other platform in a manifest list is dead weight — the device plugin now, application images
+  later, where a docker.io manifest list can carry six platforms. A reference pinned to a
+  manifest-list digest still resolves on the node even though only one architecture was stored
+  under it, because containers-storage looks an image up by its explicit name before it looks by
+  digest (`storage/storage_reference.go:114-121`), and that name is what the copy recorded.
+  Deduplicating the cache itself was tried and removed: the `dir:` transport names each blob
+  after its digest, so a layer two embedded images share is the same file twice and hardlinking
+  them is easy — but it frees nothing on the node, because `/usr` is an ostree checkout and
+  stores by content, so those two files are already one object there. Only the layer tar carries
+  both copies, so what it would buy is ISO size and upgrade bandwidth, and neither was the
+  problem. And `copy_embedded_images.sh` removes images an earlier version of the OS image put
+  in containers-storage and this one no longer names, recording what it applied in
+  `/var/lib/physically-bound-images/applied.txt` (containers-storage is machine state, the cache
+  is not, so nothing else remembers). Nothing else prunes that store: the first thing that would
+  is kubelet's image GC at 85% of the root filesystem, and what it deletes is exactly the
+  physically-bound images, on a node with no registry to pull them back from. The prune runs
+  **before** the copy, so a superseded set frees space for its replacement; an image CRI-O still
+  holds through a container from the previous boot cannot be removed yet, so that entry stays on
+  the list and the next boot tries again instead of losing track of it. A removal that fails is
+  logged, never fatal — the unit is `Requires=`d by microshift.service.
 - `microshift/Containerfile` — `FROM` the bound-images layer via `ARG BASE_IMAGE`, then
   MicroShift 4.20 from `rhocp-4.20-for-rhel-9-aarch64-rpms` +
   `fast-datapath-for-rhel-9-aarch64-rpms`
@@ -352,23 +377,26 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
 - `microshift/config.toml` — bib config with a **custom kickstart** (bib then adds only
   `ostreecontainer`; `[customizations.user]`/`filesystem` cannot be combined with a custom
   kickstart, so everything lives in the kickstart): `text --non-interactive`,
-  `timezone Asia/Jerusalem --utc`, static `192.168.1.1/24` gw `192.168.1.254` on `eth0` with
-  `--domain=example.com` and `--hostname=jetson-1`, `ignoredisk --only-use=mmcblk0`,
+  `timezone Asia/Jerusalem --utc`, static `192.168.1.10/24` gw `192.168.1.254` on `eth0` with
+  `--nameserver=192.168.1.1`, `--domain=example.com` and `--hostname=jetson-1`,
+  `ignoredisk --only-use=mmcblk0`,
   `clearpart --all` + `reqpart --add-boot` + one VG `rhel` on the rest of the eMMC holding a
   40 GiB xfs root and **no swap**, **with the remaining ~16.5 GiB of extents left free for
   MicroShift's LVMS provisioner** (fill the VG and the cluster has no dynamic PV source, so
   PostgreSQL/RabbitMQ/a model store have nowhere to go), root locked, user `cloudlet` in
   `wheel` from `@JETSON_SSH_PUBKEY@` / `@JETSON_PASSWORD_HASH@` placeholders, `reboot --eject`.
   ISO label `JETSON_ORIN_BOOTC`. The address and hostname are baked into the ISO: two devices
-  imaged from the same ISO collide on one segment. `--nameserver` is deliberately absent — the
-  network is air-gapped and there is no resolver to point at, which also means the
-  `--domain=example.com` search suffix has nothing to resolve against.
+  imaged from the same ISO collide on one segment. `--nameserver=192.168.1.1` and
+  `--domain=example.com`, the same in `k3s/config.toml`; the resolver must answer, because an
+  unreachable one blocks every lookup for the glibc timeout instead of failing at once.
 - `.github/workflows/build-image.yml` — **reusable**: register, bind container storage onto the
   runner's disk so podman gets native overlay, write the
   pull secret, build the given Containerfile with the repo root as context, run the given
   smoke-test inside the result, push `ghcr.io/<owner>/jetson-orin-bootc-<name>` under every
   tag the caller asked for, and output the ref pinned by digest
-  (`podman push --digestfile`). Tags are one immutable `<YYYYMMDD-sha8>` plus `latest` plus the
+  (`podman push --digestfile`), with each layer's size as a `::notice` — roughly what the
+  deployment occupies on the node, per layer, so the differences say where the bytes went.
+  Tags are one immutable `<YYYYMMDD-sha8>` plus `latest` plus the
   `extra-tags` input, all naming the same manifest: today `stable` on all four layers, so the
   release set can be mirrored as one, and the MicroShift minor `4.20` on the two layers that
   contain MicroShift. The caller passes that minor as a tag and as `USHIFT_VER` to the build
@@ -474,9 +502,11 @@ which namespace External Secrets should live in, given that upstream pins all te
 namespaced objects to `default`, and which provider it reads from on a disconnected node;
 whether the NVMe upgrade in decision 3 happens before real application images and a model store
 land on the node; whether to keep the entitlement-secret approach or stand up a self-hosted RHEL
-runner; whether the static `192.168.1.1` / hostname `jetson-1` baked into the ISO becomes
-per-device before a second node joins the air-gapped network, and whether
-`--domain=example.com` should be there at all with no resolver behind it; whether the k3s
+runner; whether the static `192.168.1.10` / hostname `jetson-1` baked into the ISO becomes
+per-device before a second node joins the air-gapped network, and whether `example.com` is the
+search domain that segment actually uses; whether the k3s node's kubeconfig
+(`/etc/rancher/k3s/k3s.yaml`, root-only) should be opened to the `cloudlet` user the way
+`openshift-clients` opens the microshift one; whether the k3s
 variant comes back at all, and if so how service images reach k3s's containerd, given that a
 second copy as `docker-archive` would put every application layer in `/usr` twice; how a
 deployed node's origin gets pointed at the air-gapped registry's `stable` tag — a `bootc switch`

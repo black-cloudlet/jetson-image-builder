@@ -60,7 +60,11 @@ build cannot simply `podman pull`: storage is overlayfs on overlayfs, and the vf
 cost image size × layer count.
 
 Each layer embeds its own: `microshift` takes MicroShift's control plane and the device plugin,
-`services` takes every image its manifests name. **An image a manifest names but nothing embedded
+`services` takes every image its manifests name. Only the node's architecture is stored
+(`--multi-arch=system`), and an upgrade's first boot removes the images the previous OS image
+had put in containers-storage and this one no longer names — nothing else prunes that store
+until kubelet's image GC does, at 85% of the root filesystem, and what it would delete is
+exactly these. **An image a manifest names but nothing embedded
 is a pod stuck in `ImagePullBackOff` on a disconnected node**, so both layers derive the list by
 rendering the manifests with kustomize (`microshift/manifest-images.sh`) rather than keeping one
 by hand, and `services/smoke-test.sh` re-runs the same scan against the finished cache. A
@@ -75,7 +79,7 @@ rejects one. `SERVICE_IMAGES` is still there, for an image no manifest names.
 | `base/Containerfile.podman` | `FROM` base + the physically-bound-images machinery + jtop |
 | `base/smoke-test.podman.sh` | checks the machinery, and that no image was embedded in this layer |
 | `base/physically-bound-images/embed_image.sh` | build time: copy one image into the cache baked into the OS image |
-| `base/physically-bound-images/copy_embedded_images.sh` | boot time: replay that cache into containers-storage |
+| `base/physically-bound-images/copy_embedded_images.sh` | boot time: replay that cache into containers-storage, and drop the set a previous OS image left there |
 | `base/physically-bound-images/copy-embedded-images.service` | the unit that runs it, once per boot |
 | `microshift/Containerfile` | `FROM` bound-images + MicroShift 4.20 + NVIDIA device plugin + their images |
 | `microshift/manifest-images.sh` | renders manifest roots and prints every image they name |
@@ -213,18 +217,19 @@ The kickstart in `microshift/config.toml` is fully unattended: it wipes the on-b
 locks root, and reboots ejecting the media. Booting it on a devkit whose eMMC still holds the factory
 L4T install is destructive — that is the point, but there is no confirmation prompt.
 
-The network is **static**: the device comes up as `jetson-1` on `192.168.1.1/24` via
-`192.168.1.254`, on `eth0`, with search domain `example.com` and no nameserver — the segment has
-no resolver, so that suffix has nothing to resolve against. Every device imaged from a given ISO
-gets the same address and hostname, so a second node on the same segment collides — change them
-here and rebuild, or fix up per device after the first boot. Timezone is `Asia/Jerusalem` with
-the hardware clock in UTC.
+The network is **static**: the device comes up as `jetson-1` on `192.168.1.10/24` via
+`192.168.1.254`, on `eth0`, with `192.168.1.1` as its resolver and `example.com` as the search
+domain. That resolver has to answer — an unreachable one blocks every lookup for the glibc
+timeout rather than failing at once. Every device imaged from a given ISO gets the same address
+and hostname, so a second node on the same segment collides — change them here and rebuild, or
+fix up per device after the first boot. Timezone is `Asia/Jerusalem` with the hardware clock in
+UTC.
 
 1. Flash QSPI on the station from a **R36.5.x** BSP (same L4T line as the image):
    `sudo ./flash.sh p3737-0000-p3701-0000-qspi external`
 2. `dd` the ISO to a USB key, plug it in, ESC at the NVIDIA logo, pick USB. Pull any SD card
    first, so the eMMC cannot enumerate as anything but `mmcblk0`.
-3. Wait for the reboot, then over serial (`ttyTCU0`) or `ssh cloudlet@192.168.1.1`:
+3. Wait for the reboot, then over serial (`ttyTCU0`) or `ssh cloudlet@192.168.1.10`:
    ```
    bootc status
    cat /etc/nv_tegra_release
@@ -264,14 +269,14 @@ The default kubeconfig points at loopback, so an SSH tunnel matches the serving 
 generated and needs no change on the device:
 
 ```bash
-ssh -N -L 6443:127.0.0.1:6443 cloudlet@192.168.1.1 &
-ssh cloudlet@192.168.1.1 sudo cat /var/lib/microshift/resources/kubeadmin/kubeconfig > ~/.kube/jetson
+ssh -N -L 6443:127.0.0.1:6443 cloudlet@192.168.1.10 &
+ssh cloudlet@192.168.1.10 sudo cat /var/lib/microshift/resources/kubeadmin/kubeconfig > ~/.kube/jetson
 KUBECONFIG=~/.kube/jetson oc get pods -A
 ```
 
-Talking to `192.168.1.1:6443` directly needs that address *in* the serving certificate — copying
+Talking to `192.168.1.10:6443` directly needs that address *in* the serving certificate — copying
 the loopback kubeconfig and editing its `server:` line fails with `x509: certificate is valid for
-localhost, ... not 192.168.1.1`. MicroShift writes one kubeconfig per name the certificate
+localhost, ... not 192.168.1.10`. MicroShift writes one kubeconfig per name the certificate
 covers under `/var/lib/microshift/resources/kubeadmin/`: the flat file for loopback, then
 `<name>/kubeconfig` for the node hostname and for every `apiServer.subjectAltNames` entry.
 `sudo ls` that directory to see which names you got. To add the address, create
@@ -280,14 +285,14 @@ covers under `/var/lib/microshift/resources/kubeadmin/`: the flat file for loopb
 ```yaml
 apiServer:
   subjectAltNames:
-    - 192.168.1.1
+    - 192.168.1.10
 ```
 
-then `sudo systemctl restart microshift` and copy `192.168.1.1/kubeconfig` off the node — its
+then `sudo systemctl restart microshift` and copy `192.168.1.10/kubeconfig` off the node — its
 `server:` already names the address. The hostname file (`jetson-1/kubeconfig`) works as well, but
-the kickstart sets no `--nameserver`, so the client needs `192.168.1.1 jetson-1` in its own
-`/etc/hosts`. None of this is baked into the image: the address is per device and still an open
-question (see CLAUDE.md).
+the client has to resolve `jetson-1` itself — through the segment resolver, or
+`192.168.1.10 jetson-1` in its own `/etc/hosts`. None of this is baked into the image: the
+address is per device and still an open question (see CLAUDE.md).
 
 ## Where the build runs
 

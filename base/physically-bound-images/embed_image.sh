@@ -48,7 +48,10 @@ if [[ $image =~ .*:.*@sha256:.* ]]; then
 	dst=$repo:$tag
 fi
 
+# Only the node's architecture; builder and node are both aarch64. A reference
+# pinned to a manifest-list digest still resolves: containers-storage looks an
+# image up by its explicit name before it looks by digest.
 mkdir -p "$CACHE_DIR"
-skopeo copy --multi-arch=all --preserve-digests "${additional_copy_args[@]}" \
+skopeo copy --multi-arch=system --preserve-digests "${additional_copy_args[@]}" \
 	"docker://$src" "dir:$CACHE_DIR/$fsha"
 echo "$dst,$fsha" >> "$CACHE_DIR/mapping.txt"
