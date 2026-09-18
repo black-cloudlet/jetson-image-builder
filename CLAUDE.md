@@ -318,17 +318,38 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
     webhook certificates, and KServe is gone; External Secrets issues its own webhook
     certificate from its `cert-controller` and does not use it.
   - `020-external-secrets/` — upstream's `external-secrets.yaml`, `curl`'d
-    (`EXTERNAL_SECRETS_VER`, v0.19.2), patched from three files, one per Deployment
-    (`controller.yaml`, `webhook.yaml`, `cert-controller.yaml`). Each does two things:
+    (`EXTERNAL_SECRETS_VER`, v0.19.2), patched from three strategic-merge files, one per
+    Deployment (`controller.yaml`, `webhook.yaml`, `cert-controller.yaml`). Each does two
+    things:
     deletes the `runAsUser: 1000` upstream pins with an explicit null, and adds requests and
     limits. The UID matters: restricted-v2 assigns one out of the namespace's
     `openshift.io/sa.scc.uid-range` (allocated by MicroShift's cluster-policy-controller,
     ~1000650000/10000) and refuses a pod that names its own, so the Deployments would be
     admitted and every pod they create refused. `runAsNonRoot: true` is left in place, so the
     SCC only chooses *which* non-root UID.
-    Two things are **not** settled here: everything upstream ships is pinned to namespace
-    `default` — all ten namespaced objects, and the ClusterRoleBindings that reference their
-    ServiceAccounts — and nothing in the tree creates a `SecretStore` or `ClusterSecretStore`,
+    **It installs into namespace `external-secrets`, not `default`.** Upstream pins the whole
+    install to `default` — all ten namespaced objects, the ServiceAccount subjects of both
+    ClusterRoleBindings and of the leaderelection RoleBinding, and
+    `clientConfig.service.namespace` in both ValidatingWebhookConfigurations — and ships no
+    namespace of its own, the way cert-manager does. So the root adds `namespace.yaml` (a bare
+    Namespace; kustomize sorts it to the front of the render, so the one apply creates it
+    before what goes in it) and a `namespace:` line, which moves all of the above.
+    What the transformer does **not** reach is a namespace spelled inside a container
+    argument, and there are three: cert-controller's `--service-namespace` and
+    `--secret-namespace`, and the webhook's `--dns-name=external-secrets-webhook.<ns>.svc`.
+    Those are `cert-controller-args.yaml` and `webhook-args.yaml`, JSON patches rather than
+    strategic merges because `args` is a list of strings with no merge key and a strategic
+    merge would replace the whole list, silently dropping whatever a later release adds. Each
+    replacement is guarded by a `test` op on the string it expects at that index, so an
+    upstream reorder fails the build instead of rewriting the wrong argument. Getting any of
+    the three wrong is the same failure: cert-controller issues the webhook's serving
+    certificate into a namespace nothing reads or for a DNS name the webhook rejects, the
+    webhook never serves, and with `failurePolicy: Fail` on the ExternalSecret webhook no
+    ExternalSecret can be created at all.
+    The strategic-merge patches still say `namespace: default` and have to: patches run
+    **before** the namespace transformer, so they select each resource as the upstream file
+    still spells it — `namespace: external-secrets` there matches nothing and fails the build.
+    Still **not** settled: nothing in the tree creates a `SecretStore` or `ClusterSecretStore`,
     so which provider External Secrets reads from on a disconnected node is unrecorded.
   Resources on both roots follow one rule: **memory request equals limit (1:1) and the CPU
   limit is four times the request (1:4)**. Memory 1:1 means a pod is never evicted for growing
@@ -350,6 +371,11 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   then checks: the workload set each root may contain (kustomize already fails the build on a
   patch that matches nothing, so this is aimed at a workload upstream *adds*), that no
   `runAsUser` survives in the External Secrets render and `runAsNonRoot: true` still does, that
+  the External Secrets render creates the `external-secrets` namespace and that **nothing
+  outside its CRDs still says `default`** in any spelling — metadata, a subject, a webhook
+  clientConfig, a service DNS name inside an argument — since which namespaces a namespace
+  transformer reaches depends on the kustomize version linked into whatever renders the root,
+  and a field spec a version does not carry is a silent no-op rather than an error, that
   every container has requests and limits **and that the ratios hold** (checked by arithmetic
   over the render rather than by grepping the numbers, so an edit cannot quietly break one),
   and that every image is registry-qualified and embedded. It prints `du -sh` of the cache:
@@ -476,8 +502,8 @@ hardware as of this writing.
    the ConfigMap's replica count, not 1. Then schedule that many GPU pods at once and watch
    for the OOM that says the count is above what the SOM's RAM can hold.
 4. Confirm the services layer came up, in the order the roots are numbered and with no
-   registry reachable: `oc get pods -n cert-manager` (three, Running) and the three External
-   Secrets Deployments (in whatever namespace they end up in — upstream says `default`).
+   registry reachable: `oc get pods -n cert-manager` (three, Running) and
+   `oc get pods -n external-secrets` (three, Running).
    The External Secrets pods are the ones to watch: if the `runAsUser` patch ever stops
    applying, the Deployments still exist and create nothing, and
    `oc describe rs` is where the SCC refusal shows up. Check the resource patches survived the
@@ -498,8 +524,7 @@ hardware as of this writing.
 
 Open decisions to confirm with the maintainer before implementing: what replaces KServe and
 Triton for serving the model, and whether cert-manager still has a consumer once they are gone;
-which namespace External Secrets should live in, given that upstream pins all ten of its
-namespaced objects to `default`, and which provider it reads from on a disconnected node;
+which provider External Secrets reads from on a disconnected node;
 whether the NVMe upgrade in decision 3 happens before real application images and a model store
 land on the node; whether to keep the entitlement-secret approach or stand up a self-hosted RHEL
 runner; whether the static `192.168.1.10` / hostname `jetson-1` baked into the ISO becomes

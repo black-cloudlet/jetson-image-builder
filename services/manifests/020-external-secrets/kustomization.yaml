@@ -2,14 +2,46 @@
 # EXTERNAL_SECRETS_VER. Patched from here, never forked — it is 1.5 MB, most of
 # it CRDs.
 #
-# Each patch drops the runAsUser upstream pins and adds requests and limits;
-# one file per Deployment, for the reason given in 010-cert-manager's
-# kustomization.
+# Each strategic-merge patch drops the runAsUser upstream pins and adds
+# requests and limits; one file per Deployment, for the reason given in
+# 010-cert-manager's kustomization.
+#
+# `namespace:` is what moves the install off `default`, where upstream pins all
+# ten of its namespaced objects. The transformer rewrites metadata.namespace on
+# those ten, the ServiceAccount namespace in both ClusterRoleBindings and in
+# the leaderelection RoleBinding, and clientConfig.service.namespace in both
+# ValidatingWebhookConfigurations. What it does not rewrite is a namespace
+# spelled inside a container argument, which is what the two JSON patches are
+# for; the smoke test checks the render rather than trusting either, since the
+# transformer is whichever kustomize is linked into the thing rendering — oc in
+# the smoke test, MicroShift on the node — and a path a version does not know
+# about is a silent no-op.
+#
+# The strategic-merge patches still say `namespace: default`, and must: patches
+# run BEFORE the namespace transformer, so they select each resource as the
+# upstream file still spells it. `namespace: external-secrets` there matches
+# nothing and fails the build.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+namespace: external-secrets
 resources:
+  - namespace.yaml
   - external-secrets.yaml
 patches:
   - path: controller.yaml
   - path: webhook.yaml
   - path: cert-controller.yaml
+  - path: cert-controller-args.yaml
+    target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: external-secrets-cert-controller
+      namespace: default
+  - path: webhook-args.yaml
+    target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: external-secrets-webhook
+      namespace: default

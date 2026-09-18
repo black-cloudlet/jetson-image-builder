@@ -80,8 +80,41 @@ expect_workloads 020-external-secrets "${render}/020-external-secrets.yaml" \
 Deployment/external-secrets-cert-controller
 Deployment/external-secrets-webhook"
 
-echo "== external secrets runs as an SCC-assigned uid =="
+echo "== external secrets is out of the default namespace =="
 eso="${render}/020-external-secrets.yaml"
+# Upstream pins the whole install to `default`: ten namespaced objects, the
+# ServiceAccount subjects of two ClusterRoleBindings and a RoleBinding, the
+# clientConfig of two ValidatingWebhookConfigurations, and three container
+# arguments. The kustomization moves the first groups with a namespace
+# transformer and the arguments with two JSON patches. Checked here on the
+# render, not on the patch files: the transformer is whichever kustomize is
+# linked into the renderer, and a field spec a version does not carry is a
+# silent no-op rather than an error.
+if ! awk 'BEGIN { RS = "\n---\n" }
+	/(^|\n)kind: Namespace(\n|$)/ && /\n  name: external-secrets(\n|$)/ { found = 1 }
+	END { exit !found }' "$eso"; then
+	echo "the render creates no external-secrets namespace"
+	echo "nothing else in the root can be applied without it"
+	exit 1
+fi
+echo "   Namespace/external-secrets is in the render"
+# Whole CRD documents are skipped: their schemas are full of `default:` keys
+# describing fields, none of which is a namespace. Everything else should have
+# stopped saying `default` in any spelling — metadata, a subject, a webhook
+# clientConfig, a service DNS name inside an argument. Case-sensitive, so
+# seccompProfile: RuntimeDefault is not a false alarm.
+stale=$(awk 'BEGIN { RS = "\n---\n" }
+	/(^|\n)kind: CustomResourceDefinition(\n|$)/ { next }
+	{ n = split($0, line, "\n")
+	  for (i = 1; i <= n; i++) if (line[i] ~ /default/) print line[i] }' "$eso")
+if [[ -n $stale ]]; then
+	echo "the render still points at the default namespace:"
+	echo "$stale" | sed 's/^/   /'
+	exit 1
+fi
+echo "   nothing outside the CRDs names the default namespace"
+
+echo "== external secrets runs as an SCC-assigned uid =="
 # Upstream pins runAsUser: 1000 on all three. restricted-v2 assigns a UID out
 # of the namespace's openshift.io/sa.scc.uid-range instead and rejects a pod
 # that names its own, so the Deployments would be admitted and every pod they

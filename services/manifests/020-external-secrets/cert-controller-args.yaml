@@ -1,0 +1,29 @@
+# A JSON patch, not a strategic merge: `args` is a plain list of strings with
+# no merge key, so a strategic merge replaces the whole list and would silently
+# drop an argument a later release adds. These ops touch two entries and leave
+# the rest of the list exactly as upstream wrote it.
+#
+# The namespace transformer does not reach inside a container argument, and
+# these two are the namespace. cert-controller issues the webhook serving
+# certificate, writes it to --secret-name/--secret-namespace — the Secret the
+# webhook Deployment mounts — and injects the CA into the webhook
+# configurations for --service-name/--service-namespace. Left at `default` it
+# would write the certificate into a namespace nothing reads, the webhook would
+# never serve, and with failurePolicy: Fail on the ExternalSecret webhook that
+# is a cluster where no ExternalSecret can be created at all.
+#
+# The `test` ops pin, by index, the strings being replaced. An upstream release
+# that reorders or renames these flags fails the build here instead of
+# rewriting whatever argument moved into the slot.
+- op: test
+  path: /spec/template/spec/containers/0/args/3
+  value: --service-namespace=default
+- op: replace
+  path: /spec/template/spec/containers/0/args/3
+  value: --service-namespace=external-secrets
+- op: test
+  path: /spec/template/spec/containers/0/args/5
+  value: --secret-namespace=default
+- op: replace
+  path: /spec/template/spec/containers/0/args/5
+  value: --secret-namespace=external-secrets
