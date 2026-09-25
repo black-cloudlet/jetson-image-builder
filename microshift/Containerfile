@@ -24,10 +24,8 @@ RUN firewall-offline-cmd --zone=trusted --add-source=10.42.0.0/16 && \
     firewall-offline-cmd --zone=public --add-port=443/tcp && \
     firewall-offline-cmd --zone=public --add-port=6443/tcp
 
-# Node IP on lo, not eth0: MicroShift restarts whenever the address it started
-# with disappears, and NetworkManager removes eth0's a few seconds after the
-# cable goes. /usr/lib so the image owns the profile; NM skips a keyfile anyone
-# else can read. The node's DNS name goes in with the kickstart, not here.
+# Node IP on lo: MicroShift restarts when its IP disappears, and eth0's does
+# when the cable goes. NM ignores a keyfile that is not 0600.
 COPY --chmod=0600 microshift/stable-microshift.nmconnection \
       /usr/lib/NetworkManager/system-connections/stable-microshift.nmconnection
 COPY microshift/config.d/ /etc/microshift/config.d/
