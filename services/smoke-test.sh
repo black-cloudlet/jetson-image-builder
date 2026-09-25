@@ -80,8 +80,33 @@ expect_workloads 020-external-secrets "${render}/020-external-secrets.yaml" \
 Deployment/external-secrets-cert-controller
 Deployment/external-secrets-webhook"
 
-echo "== external secrets runs as an SCC-assigned uid =="
+echo "== external secrets is out of the default namespace =="
 eso="${render}/020-external-secrets.yaml"
+# Checked on the render, not the patches: which fields the namespace
+# transformer reaches depends on the kustomize version, and one it misses is a
+# silent no-op.
+if ! awk 'BEGIN { RS = "\n---\n" }
+	/(^|\n)kind: Namespace(\n|$)/ && /\n  name: external-secrets(\n|$)/ { found = 1 }
+	END { exit !found }' "$eso"; then
+	echo "the render creates no external-secrets namespace"
+	echo "nothing else in the root can be applied without it"
+	exit 1
+fi
+echo "   Namespace/external-secrets is in the render"
+# CRDs are skipped whole, their schemas are full of `default:` keys. Nothing
+# else may say it. Case-sensitive, so RuntimeDefault is not a false alarm.
+stale=$(awk 'BEGIN { RS = "\n---\n" }
+	/(^|\n)kind: CustomResourceDefinition(\n|$)/ { next }
+	{ n = split($0, line, "\n")
+	  for (i = 1; i <= n; i++) if (line[i] ~ /default/) print line[i] }' "$eso")
+if [[ -n $stale ]]; then
+	echo "the render still points at the default namespace:"
+	echo "$stale" | sed 's/^/   /'
+	exit 1
+fi
+echo "   nothing outside the CRDs names the default namespace"
+
+echo "== external secrets runs as an SCC-assigned uid =="
 # Upstream pins runAsUser: 1000 on all three. restricted-v2 assigns a UID out
 # of the namespace's openshift.io/sa.scc.uid-range instead and rejects a pod
 # that names its own, so the Deployments would be admitted and every pod they

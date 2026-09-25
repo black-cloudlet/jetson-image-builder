@@ -2,14 +2,40 @@
 # EXTERNAL_SECRETS_VER. Patched from here, never forked — it is 1.5 MB, most of
 # it CRDs.
 #
-# Each patch drops the runAsUser upstream pins and adds requests and limits;
-# one file per Deployment, for the reason given in 010-cert-manager's
-# kustomization.
+# Each strategic-merge patch drops the runAsUser upstream pins and adds
+# requests and limits; one file per Deployment, for the reason given in
+# 010-cert-manager's kustomization.
+#
+# `namespace:` moves the install off `default` — metadata, the (Cluster)
+# RoleBinding subjects, both webhook clientConfigs — but not a namespace inside
+# a container argument, which is what the two JSON patches are for. The smoke
+# test checks the render, since which fields the transformer reaches depends on
+# the kustomize version doing the rendering.
+#
+# The strategic-merge patches still say `namespace: default`, and must: patches
+# run before the namespace transformer, so they select each resource as the
+# upstream file still spells it.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+namespace: external-secrets
 resources:
+  - namespace.yaml
   - external-secrets.yaml
 patches:
   - path: controller.yaml
   - path: webhook.yaml
   - path: cert-controller.yaml
+  - path: cert-controller-args.yaml
+    target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: external-secrets-cert-controller
+      namespace: default
+  - path: webhook-args.yaml
+    target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: external-secrets-webhook
+      namespace: default

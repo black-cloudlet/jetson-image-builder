@@ -108,12 +108,12 @@ the next one needs it sorts itself out.
 | root | what it is |
 |---|---|
 | `010-cert-manager` | upstream's static manifest, pinned by `CERT_MANAGER_VER`. Three Deployments, no Helm and no `startupapicheck` Job. Patched only for resources |
-| `020-external-secrets` | upstream's static manifest, pinned by `EXTERNAL_SECRETS_VER`. Three Deployments, patched for resources and to drop the UID upstream pins |
+| `020-external-secrets` | upstream's static manifest, pinned by `EXTERNAL_SECRETS_VER`. Three Deployments, patched for resources, to drop the UID upstream pins, and into namespace `external-secrets` |
 
 Both upstream installs are `curl`'d at build time, not vendored, and patched from the roots —
-never forked. One patch file per Deployment: the kustomize inside `oc` is older than the
-standalone tool, and a multi-document patch file makes some of those versions panic. A patch
-that matches nothing fails the build, which is what catches a rename upstream.
+never forked. One strategic-merge patch file per Deployment: the kustomize inside `oc` is older
+than the standalone tool, and a multi-document patch file makes some of those versions panic. A
+patch that matches nothing fails the build, which is what catches a rename upstream.
 
 **The UID.** External Secrets pins `runAsUser: 1000` on all three of its containers. MicroShift's
 `restricted-v2` SCC assigns a UID out of the namespace's `openshift.io/sa.scc.uid-range` and
@@ -121,6 +121,23 @@ refuses a pod that names its own, so without the patch the Deployments are admit
 pod they create is refused — a failure that shows up in `oc describe rs`, not in the Deployment.
 The patches delete the field; `runAsNonRoot: true` stays, so the SCC still only chooses *which*
 non-root UID.
+
+**The namespace.** Upstream installs External Secrets into `default` and ships no namespace of
+its own — all ten of its namespaced objects, the ServiceAccount subjects of both
+ClusterRoleBindings and of the leaderelection RoleBinding, and the `clientConfig` of both
+ValidatingWebhookConfigurations name it. `020` adds a `Namespace` resource and a `namespace:`
+line, and the kustomize namespace transformer moves all of that. It does not reach a namespace
+spelled inside a container argument, of which there are three — cert-controller's
+`--service-namespace` and `--secret-namespace`, and the webhook's `--dns-name`, which is the
+Service DNS name `external-secrets-webhook.<namespace>.svc`. Those are two JSON patches
+(`cert-controller-args.yaml`, `webhook-args.yaml`): `args` is a list of strings with no merge
+key, so a strategic merge would replace the list whole and drop whatever upstream adds to it
+later. Each replacement carries a `test` op on the string it expects, so an upstream reorder
+fails the build. Miss any of the three and cert-controller writes the webhook's serving
+certificate where nothing reads it, the webhook never serves, and no `ExternalSecret` can be
+created. The strategic-merge patches keep saying `namespace: default` on purpose: patches run
+before the namespace transformer, so that is how the resource is still spelled when they
+select it.
 
 **Requests and limits**, on every container in both roots, to one rule: **memory request equals
 the limit (1:1), and the CPU limit is four times the request (1:4)**.
@@ -146,9 +163,8 @@ are estimates and want a look under load.
 To add a component (PostgreSQL, RabbitMQ, whatever serves the model), add a numbered directory
 with a `kustomization.yaml`; the build embeds whatever images it renders.
 
-Two things are not settled. Everything External Secrets ships is pinned to namespace `default`,
-including the ClusterRoleBindings that name its ServiceAccounts, and nothing here creates a
-`SecretStore` or `ClusterSecretStore` — so it has no source to read from yet. And cert-manager
+Two things are not settled. Nothing here creates a `SecretStore` or `ClusterSecretStore`, so
+External Secrets has no source to read from yet. And cert-manager
 was installed for KServe's webhook certificates; KServe is gone and External Secrets issues its
 own from `cert-controller`, so what still needs cert-manager is an open question.
 
@@ -251,7 +267,7 @@ UTC.
    sudo -E oc get ds -n kube-system nvidia-device-plugin-daemonset
    sudo -E oc get nodes -o jsonpath='{.items[0].status.allocatable}'   # expect nvidia.com/gpu
    sudo -E oc get pods -n cert-manager     # three, Running
-   sudo -E oc get pods -A | grep external-secrets
+   sudo -E oc get pods -n external-secrets  # three, Running
    ```
    Pods stuck in `ImagePullBackOff` mean the embedding did not take — check
    `/usr/lib/containers-image-cache/mapping.txt` and

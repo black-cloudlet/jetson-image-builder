@@ -1,0 +1,19 @@
+# A JSON patch, not a strategic merge: `args` is a list of strings with no
+# merge key, so a merge replaces it whole and would drop whatever a later
+# release adds. The namespace transformer does not reach inside an argument,
+# and these two are where cert-controller writes the webhook serving
+# certificate and finds the Service to inject the CA into — stale, the webhook
+# never serves and failurePolicy: Fail blocks every ExternalSecret. The `test`
+# ops pin the strings by index, so an upstream reorder fails the build.
+- op: test
+  path: /spec/template/spec/containers/0/args/3
+  value: --service-namespace=default
+- op: replace
+  path: /spec/template/spec/containers/0/args/3
+  value: --service-namespace=external-secrets
+- op: test
+  path: /spec/template/spec/containers/0/args/5
+  value: --secret-namespace=default
+- op: replace
+  path: /spec/template/spec/containers/0/args/5
+  value: --secret-namespace=external-secrets

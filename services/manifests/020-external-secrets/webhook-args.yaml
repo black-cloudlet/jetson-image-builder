@@ -1,0 +1,9 @@
+# Same as cert-controller-args.yaml. --dns-name is the Service DNS name the
+# webhook requires its serving certificate to be valid for, and it moves with
+# the namespace; stale here is a certificate the webhook rejects.
+- op: test
+  path: /spec/template/spec/containers/0/args/2
+  value: --dns-name=external-secrets-webhook.default.svc
+- op: replace
+  path: /spec/template/spec/containers/0/args/2
+  value: --dns-name=external-secrets-webhook.external-secrets.svc
