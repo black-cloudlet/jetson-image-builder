@@ -50,7 +50,7 @@ EOF
 
 # CRI-O needs the NVIDIA runtime before a pod can ask for a GPU. Ask for the
 # .toml name: nvidia-ctk renames a .conf drop-in and still exits 0.
-ARG NVIDIA_DEVICE_PLUGIN_VER=v0.17.1
+ARG NVIDIA_DEVICE_PLUGIN_VER=v0.20.0
 RUN nvidia-ctk runtime configure --runtime=crio --set-as-default \
         --config=/etc/crio/crio.conf.d/99-nvidia.toml
 

@@ -78,9 +78,11 @@ for want in \
 		|| { echo "patch did not apply, missing from rendered output: $want"; exit 1; }
 done
 
-# Gone means the merge replaced the lists instead of merging them.
+# Gone means the merge replaced the lists instead of merging them: one
+# upstream entry per list the patch adds to. Not an env var: upstream ships
+# `env: []` since v0.18.0, so the env list has no entry of its own to lose.
 for want in \
-	'name: FAIL_ON_INIT_ERROR' \
+	'name: kubelet-device-plugins-dir' \
 	'mountPath: /var/lib/kubelet/device-plugins' \
 	; do
 	grep -qF -- "$want" <<<"$rendered" \
