@@ -380,7 +380,8 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   at start-up, and a root that does not render is a component that is silently never applied —
   then checks: the workload set each root may contain (kustomize already fails the build on a
   patch that matches nothing, so this is aimed at a workload upstream *adds*), that no
-  `runAsUser` survives in the External Secrets render and `runAsNonRoot: true` still does, that
+  `runAsUser` survives in the External Secrets render and `runAsNonRoot: true` still holds on
+  every container, that
   the External Secrets render creates the `external-secrets` namespace and that **nothing
   outside its CRDs still says `default`** in any spelling — metadata, a subject, a webhook
   clientConfig, a service DNS name inside an argument — since which namespaces a namespace
@@ -631,6 +632,12 @@ sizes are guesses) survive contact with the hardware.
   on the render.
 - An apostrophe inside an `awk` program ends the single-quoted shell word around it, and the
   error arrives as a bash syntax error pointing at `$0`. No contractions in awk comments.
+- Smoke tests do not read a render's YAML line by line. `oc patch --local -f - --type=merge
+  -p '{}' -o json` parses it into JSON without contacting a server, and `jq` (installed by the
+  microshift layer) queries that. The awk parsers this replaced counted indentation and broke
+  on list shapes kustomize is free to change. Nor do they re-assert what already fails the
+  build — a `COPY`, a `systemctl enable`, a `curl -f`, a `dnf install` — or what a lower
+  layer's test covered: each layer builds on the digest of one that passed.
 
 **Git / delivery.** Work lands on a branch and a pull request, not by hand-copying files:
 develop on the branch named in the session, commit with a message that says *why*, push, and
