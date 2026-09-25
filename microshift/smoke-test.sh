@@ -49,6 +49,7 @@ for src in 10.42.0.0/16 10.43.0.0/16 169.254.169.1; do
 done
 
 echo "== node ip on lo =="
+# The lo keyfile exists, is 0600 and holds 10.44.0.1; nodeIP names that address.
 nmconn=/usr/lib/NetworkManager/system-connections/stable-microshift.nmconnection
 have -s "$nmconn" /usr/lib/NetworkManager/system-connections
 [[ $(stat -c %a "$nmconn") == 600 ]] \

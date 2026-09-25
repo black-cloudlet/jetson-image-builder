@@ -24,7 +24,7 @@ sshkey --username=cloudlet "@JETSON_SSH_PUBKEY@"
 
 reboot --eject
 
-# Per device, beside --hostname/--domain. The API is reached by name, no IP.
+# Maps jetson-1 to 10.44.0.1 in /etc/hosts; adds jetson-1.cloudlet.local to the API cert.
 %post
 echo "10.44.0.1 jetson-1.cloudlet.local jetson-1" >> /etc/hosts
 cat > /etc/microshift/config.d/20-subject-alt-names.yaml <<'EOF'

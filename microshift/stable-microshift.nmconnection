@@ -1,5 +1,4 @@
-# MicroShift's node IP on lo. dns is a placeholder so resolv.conf is never empty;
-# priority 200 sorts it after eth0's. From `nmcli --offline connection add`.
+# Adds 10.44.0.1/32 to lo and nameserver 10.44.1.1, listed after eth0's.
 [connection]
 id=stable-microshift
 uuid=49e4d03f-09ab-4246-b810-a6e04a3c7544
