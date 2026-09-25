@@ -1,10 +1,6 @@
-# Same shape as cert-controller-args.yaml, and there for the same reason: the
-# namespace is spelled inside an argument, where the namespace transformer does
-# not reach. --dns-name is the name the webhook requires its serving
-# certificate to be valid for, and it is the Service DNS name, which moves with
-# the namespace — cert-controller issues that certificate for
-# external-secrets-webhook.<namespace>.svc, so a stale `default` here is a
-# certificate the webhook rejects at start-up and never serves behind.
+# Same as cert-controller-args.yaml. --dns-name is the Service DNS name the
+# webhook requires its serving certificate to be valid for, and it moves with
+# the namespace; stale here is a certificate the webhook rejects.
 - op: test
   path: /spec/template/spec/containers/0/args/2
   value: --dns-name=external-secrets-webhook.default.svc

@@ -1,15 +1,8 @@
-# Upstream installs into `default` and therefore ships no namespace of its own
-# — cert-manager, in 010, ships one. This is that namespace; everything else in
-# this root is moved into it by the `namespace:` line in the kustomization.
-#
-# MicroShift applies the root with the equivalent of `kubectl apply -k`, and
-# kustomize sorts a Namespace to the front of the render, so the one apply
-# creates it before the objects that go in it.
-#
-# No labels and no annotations: the SCC uid range the patches in this root
-# depend on (openshift.io/sa.scc.uid-range) is allocated by MicroShift's
-# cluster-policy-controller when the namespace appears, and a value written
-# here by hand would be a guess at what it hands out.
+# Upstream installs into `default` and ships no namespace of its own;
+# cert-manager, in 010, ships one. Everything else in this root is moved into
+# this one by the kustomization's `namespace:` line. Kustomize sorts a
+# Namespace to the front of the render, so the one apply creates it first. No
+# SCC uid-range annotation: cluster-policy-controller allocates that.
 apiVersion: v1
 kind: Namespace
 metadata:

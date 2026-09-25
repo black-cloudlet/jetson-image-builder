@@ -82,14 +82,9 @@ Deployment/external-secrets-webhook"
 
 echo "== external secrets is out of the default namespace =="
 eso="${render}/020-external-secrets.yaml"
-# Upstream pins the whole install to `default`: ten namespaced objects, the
-# ServiceAccount subjects of two ClusterRoleBindings and a RoleBinding, the
-# clientConfig of two ValidatingWebhookConfigurations, and three container
-# arguments. The kustomization moves the first groups with a namespace
-# transformer and the arguments with two JSON patches. Checked here on the
-# render, not on the patch files: the transformer is whichever kustomize is
-# linked into the renderer, and a field spec a version does not carry is a
-# silent no-op rather than an error.
+# Checked on the render, not the patches: which fields the namespace
+# transformer reaches depends on the kustomize version, and one it misses is a
+# silent no-op.
 if ! awk 'BEGIN { RS = "\n---\n" }
 	/(^|\n)kind: Namespace(\n|$)/ && /\n  name: external-secrets(\n|$)/ { found = 1 }
 	END { exit !found }' "$eso"; then
@@ -98,11 +93,8 @@ if ! awk 'BEGIN { RS = "\n---\n" }
 	exit 1
 fi
 echo "   Namespace/external-secrets is in the render"
-# Whole CRD documents are skipped: their schemas are full of `default:` keys
-# describing fields, none of which is a namespace. Everything else should have
-# stopped saying `default` in any spelling — metadata, a subject, a webhook
-# clientConfig, a service DNS name inside an argument. Case-sensitive, so
-# seccompProfile: RuntimeDefault is not a false alarm.
+# CRDs are skipped whole, their schemas are full of `default:` keys. Nothing
+# else may say it. Case-sensitive, so RuntimeDefault is not a false alarm.
 stale=$(awk 'BEGIN { RS = "\n---\n" }
 	/(^|\n)kind: CustomResourceDefinition(\n|$)/ { next }
 	{ n = split($0, line, "\n")

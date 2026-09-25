@@ -10,9 +10,7 @@
 # UID — the SCC only decides which non-root one.
 #
 # The `namespace: default` below is the selector, not a decision: patches run
-# before the namespace transformer, so this names the Deployment as the
-# upstream file still spells it. Where it ends up is the kustomization's
-# `namespace:` line.
+# before the namespace transformer. See the kustomization.
 #
 # Resources for the reason given in 010-cert-manager/resources-controller.yaml:
 # memory 1:1, CPU 1:4. Upstream asks for 10m/32Mi here and nothing at all on
