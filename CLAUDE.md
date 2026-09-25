@@ -264,7 +264,8 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   (`firewalld jq microshift microshift-release-info openshift-clients` — `oc` comes from
   `openshift-clients`; the `microshift` RPM ships no client), the firewall rules (trusted: pod
   CIDR `10.42.0.0/16`, service CIDR `10.43.0.0/16`, host-endpoint `169.254.169.1`; public: 22,
-  443, 6443), the `microshift-make-rshared.service` OVN needs, and every MicroShift container
+  443, 6443), the `microshift-make-rshared.service` OVN needs, **the node IP on `lo`**
+  (below), and every MicroShift container
   image embedded into `/usr/lib/containers-image-cache` with a `microshift.service.d` drop-in
   that orders them into containers-storage before the service starts (the unit itself lives in
   the bound-images layer; this one only orders against it), plus the NVIDIA device plugin
@@ -371,7 +372,8 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   two changes — root grows over the whole VG, because k3s provisions PVs from local-path on the
   root filesystem and free extents would be space the cluster cannot reach, and ISO label
   `JETSON_ORIN_K3S`, because anaconda finds its stage2 by label and two variants sharing one
-  would pick whichever stick enumerated first. **`embed_image.sh`'s
+  would pick whichever stick enumerated first — and none of the microshift kickstart's `%post`,
+  which is MicroShift config. **`embed_image.sh`'s
   cache is useless here**, because it writes into podman's containers-storage and k3s's
   containerd does not read it. Reviving the variant means writing `build-k3s.yml` again.
 - `microshift/config.toml` — bib config with a **custom kickstart** (bib then adds only
@@ -385,10 +387,40 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   MicroShift's LVMS provisioner** (fill the VG and the cluster has no dynamic PV source, so
   PostgreSQL/RabbitMQ/a model store have nowhere to go), root locked, user `cloudlet` in
   `wheel` from `@JETSON_SSH_PUBKEY@` / `@JETSON_PASSWORD_HASH@` placeholders, `reboot --eject`.
-  ISO label `JETSON_ORIN_BOOTC`. The address and hostname are baked into the ISO: two devices
+  ISO label `JETSON_ORIN_BOOTC`, installer GRUB menu 5 s (`[customizations.installer.bootloader.grub2]
+  menu-timeout`; osbuild defaults to 60, and the default entry is plain Install, no media
+  check). The address and hostname are baked into the ISO: two devices
   imaged from the same ISO collide on one segment. `--nameserver=192.168.1.1` and
   `--domain=cloudlet.local`, the same in `k3s/config.toml`; the resolver must answer, because an
   unreachable one blocks every lookup for the glibc timeout instead of failing at once.
+  A `%post` writes the two per-device pieces of the node-IP setup below: `10.44.0.1
+  jetson-1.cloudlet.local jetson-1` into `/etc/hosts`, and
+  `/etc/microshift/config.d/20-subject-alt-names.yaml` with `jetson-1.cloudlet.local` as the
+  only extra SAN. **No IP in MicroShift's config beyond `nodeIP`**: `192.168.1.10` lives in the
+  `network` line alone, and the laptop reaches 6443 by name, which needs an A record for
+  `jetson-1.cloudlet.local` on 192.168.1.1. MicroShift writes a kubeconfig per SAN, so the one
+  to copy off is `/var/lib/microshift/resources/kubeadmin/jetson-1.cloudlet.local/kubeconfig`.
+  bib wraps a custom kickstart as `%include` of its own followed by ours verbatim
+  (`IncludeRaw` in `osbuild/images`), so a trailing `%post … %end` is plain kickstart.
+- **Node IP on `lo`** (`microshift/stable-microshift.nmconnection`,
+  `microshift/config.d/10-node-ip.yaml`) — Red Hat's "fully disconnected hosts" procedure, built
+  into the image. With `nodeIP` unset MicroShift takes the default-route address, and its
+  `sysconfwatch` controller re-checks it every 5 s and restarts MicroShift when it is gone or
+  different (`pkg/sysconfwatch/sysconfwatch_linux.go`). NetworkManager removes `eth0`'s address
+  a few seconds after carrier drops, so every mission start and end was a restart. The keyfile
+  puts `10.44.0.1/32` on `lo` (Red Hat's example; clear of the pod and service CIDRs and of the
+  apiserver's `10.44.0.0` advertise address) with a placeholder nameserver `10.44.1.1` so
+  `resolv.conf` is never empty, at `dns-priority=200` so it sorts after `eth0`'s while
+  connected. It is a real file generated once by `nmcli --offline` (fixed UUID, so every build
+  writes the same profile), `COPY`d `0600` into `/usr/lib/NetworkManager/system-connections/`
+  because NM ignores a keyfile anyone else can read. `nodeIP` is a `config.d` drop-in, not
+  `/etc/microshift/config.yaml`, so the kickstart's SAN drop-in sits beside it rather than
+  editing one file from two places. `ignore-carrier` on `eth0` would also stop the restarts and
+  was not used: it keeps MicroShift tied to `eth0` and leaves routes pointing at a dead link.
+  A node already initialised on `192.168.1.10` needs `microshift-cleanup-data --ovn` (after
+  stopping `microshift` and `kubepods.slice`) or a re-image; a fresh install starts on `lo`.
+  `sysconfwatch` also restarts MicroShift on a clock step over 10 s, so the first chrony sync
+  after a disconnected boot can still cost one restart.
 - `.github/workflows/build-image.yml` — **reusable**: register, bind container storage onto the
   runner's disk so podman gets native overlay, write the
   pull secret, build the given Containerfile with the repo root as context, run the given
@@ -470,7 +502,11 @@ hardware as of this writing.
    nothing enables a jtop service, so expect to find out there whether it works as installed.
 2. Same boot, confirm MicroShift: `systemctl status microshift`, `oc get pods -A` all running
    with no registry reachable (that is what the embedding buys), `vgs` showing free extents in
-   VG `rhel`, and a PVC binding against the topolvm storage class.
+   VG `rhel`, and a PVC binding against the topolvm storage class. Then the node IP:
+   `ip addr show lo` has `10.44.0.1/32`, `oc get node -o wide` shows it as INTERNAL-IP; pull
+   the cable, wait a minute, and `journalctl -u microshift` must show no `Restarting
+   MicroShift` and `systemctl show -p NRestarts microshift` must not move. Plug back in and
+   run `oc` from the laptop through the `jetson-1.cloudlet.local` kubeconfig.
 3. Confirm the device plugin: `oc get ds -n kube-system nvidia-device-plugin-daemonset` and
    `nvidia.com/gpu` in the node's allocatable resources — with time slicing that should read
    the ConfigMap's replica count, not 1. Then schedule that many GPU pods at once and watch

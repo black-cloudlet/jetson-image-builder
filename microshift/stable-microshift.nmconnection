@@ -1,0 +1,21 @@
+# Adds 10.44.0.1/32 to lo and nameserver 10.44.1.1, listed after eth0's.
+[connection]
+id=stable-microshift
+uuid=49e4d03f-09ab-4246-b810-a6e04a3c7544
+type=loopback
+interface-name=lo
+
+[loopback]
+
+[ipv4]
+address1=10.44.0.1/32
+dns=10.44.1.1;
+dns-priority=200
+ignore-auto-dns=true
+method=manual
+
+[ipv6]
+addr-gen-mode=default
+method=auto
+
+[proxy]

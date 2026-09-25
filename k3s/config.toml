@@ -7,7 +7,7 @@ keyboard us
 timezone Asia/Jerusalem --utc
 
 # Static: two devices imaged from one ISO collide on a segment.
-network --bootproto=static --ip=192.168.1.10 --netmask=255.255.255.0 --gateway=192.168.1.254 --nameserver=192.168.1.1 --device=eth0 --onboot=on --domain=cloudlet.local --activate --hostname=jetson-1
+network --bootproto=static --ip=192.168.1.10 --netmask=255.255.255.0 --gateway=192.168.1.254 --nameserver=192.168.1.1 --device=eth0 --onboot=on --domain=cloudlet.local --hostname=jetson-1
 
 # On-board eMMC only; no swap. Root takes the whole VG rather than leaving free extents
 # as the microshift variant does: k3s provisions PVs from local-path on the root
@@ -31,3 +31,7 @@ reboot --eject
 # Distinct from the microshift ISO's label: anaconda finds its stage2 by label,
 # so two variants sharing one would pick whichever stick enumerated first.
 volume_id = "JETSON_ORIN_K3S"
+
+# Boots the installer's default GRUB entry after 5 s instead of osbuild's 60.
+[customizations.installer.bootloader.grub2]
+menu-timeout = 5

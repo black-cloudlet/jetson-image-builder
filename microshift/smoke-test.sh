@@ -48,6 +48,18 @@ for src in 10.42.0.0/16 10.43.0.0/16 169.254.169.1; do
 	[[ " $sources " == *" $src "* ]] || { echo "missing trusted source: $src"; exit 1; }
 done
 
+echo "== node ip on lo =="
+# The lo keyfile exists, is 0600 and holds 10.44.0.1; nodeIP names that address.
+nmconn=/usr/lib/NetworkManager/system-connections/stable-microshift.nmconnection
+have -s "$nmconn" /usr/lib/NetworkManager/system-connections
+[[ $(stat -c %a "$nmconn") == 600 ]] \
+	|| { echo "mode $(stat -c %a "$nmconn") on $nmconn, NetworkManager needs 600"; exit 1; }
+grep -qx 'address1=10.44.0.1/32' "$nmconn" \
+	|| { echo "no 10.44.0.1/32 in $nmconn"; exit 1; }
+have -s /etc/microshift/config.d/10-node-ip.yaml /etc/microshift/config.d
+grep -q '^ *nodeIP: 10.44.0.1$' /etc/microshift/config.d/10-node-ip.yaml \
+	|| { echo "nodeIP is not the lo address"; exit 1; }
+
 echo "== nvidia device plugin =="
 # .toml is the name nvidia-ctk actually writes for a drop-in; on a miss, list the
 # directory so a future rename says so instead of failing blind.

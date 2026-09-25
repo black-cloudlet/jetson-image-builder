@@ -7,7 +7,7 @@ keyboard us
 timezone Asia/Jerusalem --utc
 
 # Static: two devices imaged from one ISO collide on a segment.
-network --bootproto=static --ip=192.168.1.10 --netmask=255.255.255.0 --gateway=192.168.1.254 --nameserver=192.168.1.1 --device=eth0 --onboot=on --domain=cloudlet.local --activate --hostname=jetson-1
+network --bootproto=static --ip=192.168.1.10 --netmask=255.255.255.0 --gateway=192.168.1.254 --nameserver=192.168.1.1 --device=eth0 --onboot=on --domain=cloudlet.local --hostname=jetson-1
 
 # On-board eMMC only; 40 GiB root, no swap, the rest of the VG left free for MicroShift's LVMS.
 ignoredisk --only-use=mmcblk0
@@ -23,7 +23,21 @@ user --name=cloudlet --groups=wheel --iscrypted --password=@JETSON_PASSWORD_HASH
 sshkey --username=cloudlet "@JETSON_SSH_PUBKEY@"
 
 reboot --eject
+
+# Maps jetson-1 to 10.44.0.1 in /etc/hosts; adds jetson-1.cloudlet.local to the API cert.
+%post
+echo "10.44.0.1 jetson-1.cloudlet.local jetson-1" >> /etc/hosts
+cat > /etc/microshift/config.d/20-subject-alt-names.yaml <<'EOF'
+apiServer:
+  subjectAltNames:
+    - jetson-1.cloudlet.local
+EOF
+%end
 """
 
 [customizations.iso]
 volume_id = "JETSON_ORIN_BOOTC"
+
+# Boots the installer's default GRUB entry after 5 s instead of osbuild's 60.
+[customizations.installer.bootloader.grub2]
+menu-timeout = 5

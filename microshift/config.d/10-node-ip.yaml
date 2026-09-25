@@ -1,0 +1,3 @@
+# Runs MicroShift on 10.44.0.1, the address stable-microshift puts on lo.
+node:
+  nodeIP: 10.44.0.1

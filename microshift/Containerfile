@@ -24,6 +24,11 @@ RUN firewall-offline-cmd --zone=trusted --add-source=10.42.0.0/16 && \
     firewall-offline-cmd --zone=public --add-port=443/tcp && \
     firewall-offline-cmd --zone=public --add-port=6443/tcp
 
+# Installs the lo connection (0600, root-only) and MicroShift's nodeIP drop-in.
+COPY --chmod=0600 microshift/stable-microshift.nmconnection \
+      /usr/lib/NetworkManager/system-connections/stable-microshift.nmconnection
+COPY microshift/config.d/ /etc/microshift/config.d/
+
 # OVN needs the root subtree shared; on bare metal systemd has already done it.
 COPY <<'EOF' /usr/lib/systemd/system/microshift-make-rshared.service
 [Unit]
