@@ -67,7 +67,7 @@ RUN mkdir -p /usr/share/k3s/agent-images && \
 
 # k3s auto-deploys plain YAML from the server manifests directory; it does not
 # run kustomize, so there is no kustomization.yaml as there is under microshift.
-ARG NVIDIA_DEVICE_PLUGIN_VER=v0.17.1
+ARG NVIDIA_DEVICE_PLUGIN_VER=v0.20.0
 RUN mkdir -p /usr/share/k3s/manifests && \
     curl -fsSL -o /usr/share/k3s/manifests/nvidia-device-plugin.yaml \
       "https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/${NVIDIA_DEVICE_PLUGIN_VER}/deployments/static/nvidia-device-plugin.yml"
