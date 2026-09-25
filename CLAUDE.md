@@ -387,7 +387,9 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   MicroShift's LVMS provisioner** (fill the VG and the cluster has no dynamic PV source, so
   PostgreSQL/RabbitMQ/a model store have nowhere to go), root locked, user `cloudlet` in
   `wheel` from `@JETSON_SSH_PUBKEY@` / `@JETSON_PASSWORD_HASH@` placeholders, `reboot --eject`.
-  ISO label `JETSON_ORIN_BOOTC`. The address and hostname are baked into the ISO: two devices
+  ISO label `JETSON_ORIN_BOOTC`, installer GRUB menu 5 s (`[customizations.installer.bootloader.grub2]
+  menu-timeout`; osbuild defaults to 60, and the default entry is plain Install, no media
+  check). The address and hostname are baked into the ISO: two devices
   imaged from the same ISO collide on one segment. `--nameserver=192.168.1.1` and
   `--domain=cloudlet.local`, the same in `k3s/config.toml`; the resolver must answer, because an
   unreachable one blocks every lookup for the glibc timeout instead of failing at once.

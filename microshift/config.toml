@@ -37,3 +37,7 @@ EOF
 
 [customizations.iso]
 volume_id = "JETSON_ORIN_BOOTC"
+
+# Boots the installer's default GRUB entry after 5 s instead of osbuild's 60.
+[customizations.installer.bootloader.grub2]
+menu-timeout = 5

@@ -31,3 +31,7 @@ reboot --eject
 # Distinct from the microshift ISO's label: anaconda finds its stage2 by label,
 # so two variants sharing one would pick whichever stick enumerated first.
 volume_id = "JETSON_ORIN_K3S"
+
+# Boots the installer's default GRUB entry after 5 s instead of osbuild's 60.
+[customizations.installer.bootloader.grub2]
+menu-timeout = 5
