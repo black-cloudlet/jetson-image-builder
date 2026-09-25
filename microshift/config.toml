@@ -23,6 +23,19 @@ user --name=cloudlet --groups=wheel --iscrypted --password=@JETSON_PASSWORD_HASH
 sshkey --username=cloudlet "@JETSON_SSH_PUBKEY@"
 
 reboot --eject
+
+# Per device, so it lives beside --hostname/--domain above and repeats them.
+# /etc/hosts: the node resolves its own name with 192.168.1.1 out of reach, on
+# the lo address MicroShift runs on. subjectAltNames: the name only, no IP, so
+# the laptop reaches 6443 through DNS and the address stays in the network line.
+%post
+echo "10.44.0.1 jetson-1.cloudlet.local jetson-1" >> /etc/hosts
+cat > /etc/microshift/config.d/20-subject-alt-names.yaml <<'EOF'
+apiServer:
+  subjectAltNames:
+    - jetson-1.cloudlet.local
+EOF
+%end
 """
 
 [customizations.iso]

@@ -1,0 +1,4 @@
+# The address on lo from stable-microshift.nmconnection. Left unset, MicroShift
+# takes the default-route address and restarts whenever eth0 loses it.
+node:
+  nodeIP: 10.44.0.1
