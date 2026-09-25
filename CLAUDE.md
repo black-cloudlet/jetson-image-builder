@@ -281,9 +281,18 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   memory isolation between replicas, so the count is a claim about what fits in the SOM's
   RAM — 32 GB on the POC module — and 1 disables sharing. `renameByDefault` stays off, so
   the resource is plain `nvidia.com/gpu` and stock pod specs need no change.
-  A patch that stops matching is a silent no-op in kustomize, so the smoke test runs
-  `oc kustomize` and checks the render for both the added fields and the upstream ones it
-  must not have replaced.
+  A patch that stops matching is a silent no-op in kustomize, and a strategic merge whose
+  list key stops matching is worse — it appends an entry rather than merging into the
+  upstream one, which renders cleanly and only fails on the node. So the smoke test runs
+  `oc kustomize` and reads the render for how it is **wired**, never for which line
+  upstream happens to write: exactly one container in the pod, `CONFIG_FILE` pointing into
+  a volumeMount whose volume resolves to a ConfigMap that is in the render and carries a
+  replica count (which is also where the count in the log comes from), and
+  `/var/lib/kubelet/device-plugins` mounted, that last one because the plugin cannot
+  register with kubelet without it. Upstream renames fields between tags — v0.18.0 dropped
+  `FAIL_ON_INIT_ERROR`, v0.20.0 renamed the kubelet socket volume — and an earlier version
+  of this check spelled those names, so a routine bump failed the build claiming the merge
+  had clobbered them. Do not put an upstream field name back in.
   **No `microshift-gitops`**: core Argo CD was installed here from the OpenShift GitOps channel
   and has been removed, so the subscription no longer needs that entitlement and the smoke test
   no longer looks for its manifests.

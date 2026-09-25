@@ -59,35 +59,98 @@ have -s /etc/microshift/manifests/nvidia-device-plugin-time-slicing.yaml \
 	/etc/microshift/manifests
 
 echo "== gpu time slicing =="
-# A patch that stops matching is a no-op in kustomize, not an error.
-rendered=$(oc kustomize /etc/microshift/manifests)
+# A patch that stops matching is a no-op in kustomize, not an error, and a
+# strategic merge whose list key stops matching is worse: it appends an entry
+# instead of merging into upstream one. Both render cleanly here and fail on
+# the node, where the kustomizer retries for ten minutes and then gives up in
+# one journal line.
+#
+# So the render is checked for how it is wired, never for which line upstream
+# happens to write. The plugin manifest is fetched by tag and upstream renames
+# fields between tags - v0.18.0 dropped FAIL_ON_INIT_ERROR, v0.20.0 renamed the
+# kubelet socket volume - and none of that is a broken patch. What has to hold:
+# one container, CONFIG_FILE pointing into a mount that resolves to the
+# replicas ConfigMap, and the kubelet socket directory mounted.
+rendered=$(oc kustomize /etc/microshift/manifests) \
+	|| { echo "does not render: /etc/microshift/manifests"; exit 1; }
 
-# From the ConfigMap: a Deployment added later would own the render's first one.
-replicas=$(sed -n 's/^ *replicas: \([0-9]*\) *$/\1/p' \
-	/etc/microshift/manifests/nvidia-device-plugin-config.yaml)
-[[ -n $replicas ]] || { echo "no replica count in the device plugin config"; exit 1; }
-echo "time-slicing replicas: $replicas"
+# Prints the replica count it reached through the render, so the number in the
+# log is the one the plugin will read. Diagnostics go to stderr, out of it.
+replicas=$(awk '
+	function warn(msg) { print "   " msg > "/dev/stderr"; bad = 1 }
+	function flush_doc() {
+		if (kind == "ConfigMap" && name != "" && rep != "") cmrep[name] = rep
+		kind = ""; name = ""; rep = ""; sect = ""; inner = ""
+		flush_mount(); flush_env(); flush_vol()
+	}
+	function flush_mount() { if (mpath != "") mount[mpath] = mname; mpath = ""; mname = "" }
+	function flush_env()   { if (ename == "CONFIG_FILE") cfg = evalue; ename = ""; evalue = "" }
+	# Only a volume that is a configMap is recorded, so a volume of another
+	# kind at the same path reads as missing rather than as an empty name.
+	function flush_vol()   { if (vname != "" && vcm != "") volcm[vname] = vcm
+		vname = ""; vcm = "" }
 
-for want in \
-	'name: CONFIG_FILE' \
-	'value: /etc/nvidia-device-plugin/config.yaml' \
-	'mountPath: /etc/nvidia-device-plugin' \
-	'name: nvidia-device-plugin-config' \
-	; do
-	grep -qF -- "$want" <<<"$rendered" \
-		|| { echo "patch did not apply, missing from rendered output: $want"; exit 1; }
-done
+	/^---$/ { flush_doc(); next }
+	/^kind: / { kind = $2; next }
+	/^metadata:$/ { meta = 1; next }
+	meta && /^  name: / { name = $2; meta = 0; next }
+	/^[a-z]/ { meta = 0 }
+	/^ +replicas: [0-9]+$/ { rep = $2; next }
 
-# Gone means the merge replaced the lists instead of merging them: one
-# upstream entry per list the patch adds to. Not an env var: upstream ships
-# `env: []` since v0.18.0, so the env list has no entry of its own to lose.
-for want in \
-	'name: kubelet-device-plugins-dir' \
-	'mountPath: /var/lib/kubelet/device-plugins' \
-	; do
-	grep -qF -- "$want" <<<"$rendered" \
-		|| { echo "strategic merge clobbered upstream field: $want"; exit 1; }
-done
+	/^      containers:$/ { sect = "containers"; inner = ""; next }
+	/^      volumes:$/    { flush_vol(); sect = "volumes"; inner = ""; next }
+	/^      [a-z]/ { flush_mount(); flush_env(); flush_vol(); sect = ""; inner = "" }
+	/^  [a-z]/     { flush_mount(); flush_env(); flush_vol(); sect = ""; inner = "" }
+
+	# A list item carries its first key on the dash line. Re-indent it so the
+	# rules below see one shape, whichever key kustomize puts first.
+	sect == "containers" && /^      - / { ncon++; flush_mount(); flush_env()
+		inner = ""; sub(/^      - /, "        ") }
+	sect == "containers" && /^        volumeMounts:/ { flush_env(); inner = "vm"; next }
+	sect == "containers" && /^        env:/ { flush_mount(); inner = "env"; next }
+	sect == "containers" && /^        [a-z]/ { flush_mount(); flush_env(); inner = "" }
+
+	inner == "vm" && /^        - / { flush_mount() }
+	inner == "vm" && /mountPath: / { mpath = $NF; next }
+	inner == "vm" && /name: /      { mname = $NF; next }
+
+	inner == "env" && /^        - / { flush_env() }
+	inner == "env" && /name: /  { ename = $NF; next }
+	inner == "env" && /value: / { evalue = $NF; next }
+
+	sect == "volumes" && /^      - / { flush_vol(); sub(/^      - /, "        ") }
+	sect == "volumes" && /^          name: / { vcm = $NF; next }
+	sect == "volumes" && /^        name: /   { vname = $NF; next }
+
+	END {
+		flush_doc()
+		if (ncon != 1)
+			warn("the pod has " ncon + 0 " containers, expected 1: a merge key " \
+				"that stopped matching appends one instead of patching upstream")
+		if (cfg == "")
+			warn("no CONFIG_FILE in the render: the patch never reached the container")
+		else {
+			dir = cfg
+			sub(/\/[^\/]*$/, "", dir)
+			if (!(dir in mount))
+				warn("CONFIG_FILE is " cfg " but no volumeMount covers " dir)
+			else if (!(mount[dir] in volcm))
+				warn("the volume mounted at " dir " is not a configMap")
+			else if (!(volcm[mount[dir]] in cmrep))
+				warn("configMap " volcm[mount[dir]] " is not in the render, " \
+					"or names no replica count")
+			else
+				print cmrep[volcm[mount[dir]]]
+		}
+		# Upstream ships this one, but it is checked because the plugin cannot
+		# register with kubelet without it, not to prove a merge merged.
+		if (!("/var/lib/kubelet/device-plugins" in mount))
+			warn("nothing mounts /var/lib/kubelet/device-plugins: " \
+				"the plugin cannot register with kubelet")
+		if (bad) exit 1
+	}
+' <<<"$rendered") || { echo "the device plugin is not wired to the time-slicing config"; exit 1; }
+echo "   time-slicing replicas: $replicas"
 
 echo "== embedded images =="
 mapping=/usr/lib/containers-image-cache/mapping.txt
