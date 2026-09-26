@@ -1,0 +1,9 @@
+# The node half of the local model cache next door. Selects nodes labelled
+# kserve/localmodel=worker, which this one is not, and mounts a hostPath that
+# restricted-v2 forbids if it were. Deleted so its image is not embedded.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kserve-localmodelnode-agent
+  namespace: kserve
+$patch: delete

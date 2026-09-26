@@ -1,0 +1,8 @@
+# A root of its own, after 030: a ClusterServingRuntime needs the CRD and the
+# validating webhook from the KServe install, and the webhook serves only once
+# cert-manager has issued its certificate. MicroShift retries a failing root
+# every 10s for 10 minutes, which is what bridges the two.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - triton-igpu.yaml

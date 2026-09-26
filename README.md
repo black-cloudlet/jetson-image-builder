@@ -32,7 +32,7 @@ bound-images   the image-embedding machinery, plus jtop
   |
 microshift   MicroShift 4.20 + NVIDIA device plugin + their images
   |            |
-  |          services   cert-manager + External Secrets + their images
+  |          services   cert-manager + External Secrets + KServe + Triton + their images
  or           |
 k3s          k3s + NVIDIA device plugin + their images   (no workflow builds this)
   |
@@ -85,9 +85,9 @@ rejects one. `SERVICE_IMAGES` is still there, for an image no manifest names.
 | `microshift/manifest-images.sh` | renders manifest roots and prints every image they name |
 | `microshift/config.toml` | bootc-image-builder config — the unattended kickstart and the ISO label |
 | `microshift/smoke-test.sh` | checks run inside the finished image before it is pushed |
-| `services/Containerfile` | `FROM` microshift + cert-manager, External Secrets and their images |
+| `services/Containerfile` | `FROM` microshift + cert-manager, External Secrets, KServe, the Triton runtime and their images |
 | `services/manifests/` | one kustomize root per component, applied by MicroShift at every start |
-| `services/smoke-test.sh` | renders every root, checks the patches took, the ratios hold and the cache is whole |
+| `services/smoke-test.sh` | renders every root, checks the patches took, every pod is admissible under `restricted-v2`, the ratios hold and the cache is whole |
 | `k3s/*` | the k3s variant — still here, built by nothing |
 | `.github/workflows/build-image.yml` | reusable — builds and pushes one layer |
 | `.github/workflows/build-iso.yml` | reusable — turns a pushed image into an installer ISO |
@@ -109,8 +109,10 @@ the next one needs it sorts itself out.
 |---|---|
 | `010-cert-manager` | upstream's static manifest, pinned by `CERT_MANAGER_VER`. Three Deployments, no Helm and no `startupapicheck` Job. Patched only for resources |
 | `020-external-secrets` | upstream's static manifest, pinned by `EXTERNAL_SECRETS_VER`. Three Deployments, patched for resources, to drop the UID upstream pins, and into namespace `external-secrets` |
+| `030-kserve` | upstream's `kserve.yaml`, pinned by `KSERVE_VER` (v0.20.0). Standard (raw) deployment mode, no Ingress creation, no `uidModelcar`, registry-qualified images, and one workload of upstream's four. Namespace `kserve`, with Pod Security enforced at `restricted` |
+| `040-triton-runtime` | one `ClusterServingRuntime`, `triton-igpu`: NVIDIA Triton's `-py3-igpu` build for Tegra, one `nvidia.com/gpu` (one of the four time slices), TensorRT and ONNX |
 
-Both upstream installs are `curl`'d at build time, not vendored, and patched from the roots —
+The upstream installs are `curl`'d at build time, not vendored, and patched from the roots —
 never forked. One strategic-merge patch file per Deployment: the kustomize inside `oc` is older
 than the standalone tool, and a multi-document patch file makes some of those versions panic. A
 patch that matches nothing fails the build, which is what catches a rename upstream.
@@ -139,7 +141,29 @@ created. The strategic-merge patches keep saying `namespace: default` on purpose
 before the namespace transformer, so that is how the resource is still spelled when they
 select it.
 
-**Requests and limits**, on every container in both roots, to one rule: **memory request equals
+**KServe.** Only `kserve-controller-manager` runs; it serves every webhook this node uses —
+`InferenceService` defaulting and validation, the `ClusterServingRuntime` validator, and the pod
+mutator that injects the model. The other three workloads are separate binaries for features
+nothing here creates, and are deleted: `llmisvc-controller-manager` (LLM serving; it also pins
+`runAsUser: 1000`), and the two halves of the local model cache, which is off upstream and
+pointless when models arrive inside the image. Their CRDs and webhook configurations stay; each
+webhook matches only its own kinds. `kserve-cluster-resources.yaml` is not fetched at all: it
+carries fourteen serving runtimes and every image they name would have to be embedded.
+
+`uidModelcar` is the one setting that reaches the pods KServe builds at run time. For an `oci://`
+model the pod mutator sets `runAsUser` to it on both the model sidecar and `kserve-container`,
+and upstream's 1010 is outside the range `restricted-v2` assigns from, so every such pod would be
+refused. Unset, the SCC gives the whole pod one UID, which is also what lets Triton read the model
+through `/proc/<pid>/root` of the sidecar.
+
+**Admission.** The smoke test checks every pod template and every serving runtime container, in
+every root, against what `restricted-v2` and Pod Security `restricted` require: no pinned UID,
+GID or `fsGroup`, no host access or privilege, capabilities dropped to `ALL`, `runAsNonRoot` and
+seccomp `RuntimeDefault`. It checks the render, not the node, so the pods KServe injects are
+outside it — whether a predictor pod is admitted, and whether its SCC-assigned UID can open the
+GPU device nodes, is found out on hardware.
+
+**Requests and limits**, on every container in every root, to one rule: **memory request equals
 the limit (1:1), and the CPU limit is four times the request (1:4)**.
 
 | root | Deployment | container | CPU req → limit | memory req = limit |
@@ -150,9 +174,15 @@ the limit (1:1), and the CPU limit is four times the request (1:4)**.
 | `020` | `external-secrets` | `external-secrets` | 50m → 200m | 256Mi |
 | `020` | `external-secrets-webhook` | `webhook` | 25m → 100m | 128Mi |
 | `020` | `external-secrets-cert-controller` | `cert-controller` | 25m → 100m | 128Mi |
+| `030` | `kserve-controller-manager` | `manager` | 100m → 400m | 300Mi |
+| `030` | `kserve-controller-manager` | `kube-rbac-proxy` | 10m → 40m | 64Mi |
+| `040` | `triton-igpu` (runtime) | `kserve-container` | 1 → 4 | 8Gi |
+
+The model containers KServe injects stay at 10m/15Mi: it sets their request and limit from one
+value, so CPU 1:4 cannot be expressed for them.
 
 Upstream ships almost none of this — cert-manager sets nothing at all, External Secrets sets
-`10m`/`32Mi` on one of its three — which makes every one of these pods BestEffort and the first
+`10m`/`32Mi` on one of its three, KServe sets a ratio that fits neither rule — which makes every one of these pods BestEffort and the first
 thing evicted under pressure. Memory 1:1 means a pod is never evicted for growing past a request
 it was never going to stay under; it is OOM-killed at its own ceiling instead, which is a
 container problem rather than a node one. CPU 1:4 leaves burst room for the reconcile storm at
@@ -163,10 +193,13 @@ are estimates and want a look under load.
 To add a component (PostgreSQL, RabbitMQ, whatever serves the model), add a numbered directory
 with a `kustomization.yaml`; the build embeds whatever images it renders.
 
-Two things are not settled. Nothing here creates a `SecretStore` or `ClusterSecretStore`, so
-External Secrets has no source to read from yet. And cert-manager
-was installed for KServe's webhook certificates; KServe is gone and External Secrets issues its
-own from `cert-controller`, so what still needs cert-manager is an open question.
+Not settled: nothing here creates a `SecretStore` or `ClusterSecretStore`, so External Secrets
+has no source to read from yet. cert-manager has its consumer back — KServe's three webhook
+serving certificates come from a self-signed `Issuer` in `kserve`. Nothing creates an
+`InferenceService` yet either: that comes with the first model, packaged as an `oci://` image and
+embedded like everything else. The Triton tag, `25.02-py3-igpu`, is unverified against JetPack
+6.2.2: NGC was not reachable when it was chosen, and a tag whose bundled CUDA the r36.5 driver
+cannot run fails only on hardware.
 
 The embedded cache is paid for twice on the eMMC — once in `/usr`, once when it is replayed into
 containers-storage under `/var` — so check the `du -sh` the smoke test prints against the 40 GiB
@@ -196,7 +229,7 @@ L4T line as the image built here — before a device can boot this ISO.
 |---|---|
 | `RH_REGISTRY_USER` / `RH_REGISTRY_PASSWORD` | pull `registry.redhat.io/rhel9/bootc-image-builder` |
 | `RHSM_USERNAME` / `RHSM_PASSWORD` | Red Hat account — both jobs register with subscription-manager for the MicroShift RPMs and bib's Anaconda depsolve |
-| `OPENSHIFT_PULL_SECRET` | pull secret JSON from console.redhat.com/openshift/install/pull-secret — pulls MicroShift's and the device plugin's container images at build time. The services layer's images (`quay.io/jetstack`, `oci.external-secrets.io`) are public and pulled anonymously |
+| `OPENSHIFT_PULL_SECRET` | pull secret JSON from console.redhat.com/openshift/install/pull-secret — pulls MicroShift's and the device plugin's container images at build time. The services layer's images (`quay.io/jetstack`, `oci.external-secrets.io`, `docker.io/kserve`, `quay.io/brancz`, `nvcr.io/nvidia`) are public and pulled anonymously |
 | `JETSON_SSH_PUBKEY` | public key for the `cloudlet` user |
 | `JETSON_PASSWORD_HASH` | `openssl passwd -6` output for the `cloudlet` user — the hash, not the password |
 

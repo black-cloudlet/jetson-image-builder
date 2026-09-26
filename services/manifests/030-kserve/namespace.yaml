@@ -1,0 +1,18 @@
+# kserve.yaml ships no namespace, and everything namespaced in it is in this one.
+#
+# control-plane is upstream's label, kept for upstream's reason: the pod mutator
+# skips namespaces that carry it, so KServe's own controller is never sent
+# through a webhook it serves itself.
+#
+# Pod Security is enforced here rather than left to the SCC alone: restricted-v2
+# admits a pod that another SCC could also admit, and granting this namespace's
+# service accounts anything wider would then pass silently. The sync label stops
+# cluster-policy-controller from rewriting these labels to what it derives.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kserve
+  labels:
+    control-plane: kserve-controller-manager
+    pod-security.kubernetes.io/enforce: restricted
+    security.openshift.io/scc.podSecurityLabelSync: "false"

@@ -1,0 +1,9 @@
+# LLMInferenceService, KServe's LLM path (vLLM, llm-d). An image-recognition
+# node creates none, and the pod pins runAsUser: 1000, which restricted-v2
+# refuses, so kept it would be a Deployment failing to create a pod forever.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmisvc-controller-manager
+  namespace: kserve
+$patch: delete

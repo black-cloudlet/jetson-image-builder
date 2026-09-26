@@ -24,14 +24,17 @@ Target stack on the device:
 - Kubernetes: **MicroShift 4.20** is the only variant that builds. `k3s/` is still in the tree —
   Containerfile, kickstart, staging unit, smoke test — but **nothing builds it**: its caller
   workflow was deleted, so picking it back up means writing `build-k3s.yml` again (see below)
-- On the cluster today: cert-manager and External Secrets, from `services/`
-- Still to come on the cluster: PostgreSQL, RabbitMQ, and whatever serves the model
+- On the cluster today: cert-manager, External Secrets, KServe (Standard mode) and a Triton
+  `ClusterServingRuntime`, from `services/`
+- Still to come on the cluster: PostgreSQL, RabbitMQ, and the first `InferenceService`
 - All container images physically bound into the OS image (zero network at first boot)
 
-**Inference is not in the pipeline right now.** KServe, the Triton serving runtime and their
-kustomize roots were removed from `services/` (`bba9d10 delete kserve`); the layer that replaced
-them installs cert-manager and External Secrets. The reason is not recorded here, and neither is
-what serves the model instead — treat both as open.
+**Model serving is upstream KServe, not Red Hat's.** MicroShift's own KServe packaging
+(`microshift-ai-model-serving`) is x86_64 only, and this node is aarch64, so `services/` applies
+upstream `kserve.yaml` and a Triton runtime of its own. KServe was in the tree once before and
+removed in `bba9d10` for a reason nobody recorded; it came back with the strict-admission checks
+described under `services/` below. No model is deployed yet: nothing creates an
+`InferenceService`.
 
 ### Hardware
 
@@ -148,7 +151,7 @@ what serves the model instead — treat both as open.
    images.
    `services/` builds `FROM` **that** and holds what runs on the cluster: one kustomize root
    per component, numbered, and every image any of those roots names embedded. Today that is
-   cert-manager and External Secrets.
+   cert-manager, External Secrets, KServe and the Triton runtime.
    `k3s/` still sits beside `microshift/` and would reuse both shared layers untouched, but no
    workflow builds it: `build-k3s.yml` was deleted, and re-enabling the variant means writing
    that caller again (`base/Containerfile.base` → `base/Containerfile.podman` →
@@ -311,7 +314,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   manifest that deploys it, and an `images:` transformer defeats a grep. The build embeds
   what it prints; the smoke test re-runs it against the cache. `services/` uses the same
   script from `/opt/microshift/manifest-images.sh`.
-- `services/Containerfile` — `FROM` the microshift layer via `ARG BASE_IMAGE`. Two kustomize
+- `services/Containerfile` — `FROM` the microshift layer via `ARG BASE_IMAGE`. Four kustomize
   roots under `/etc/microshift/manifests.d/`, numbered, plus every image they name embedded.
   No `dnf`, so no entitlement needed for the RPM side. The numbers are load-bearing:
   MicroShift's kustomizer scans the default paths, **sorts** the glob matches and applies each
@@ -324,9 +327,9 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
     (`CERT_MANAGER_VER`, v1.21.2). The static manifest is the whole install: three Deployments,
     no Helm and no `startupapicheck` Job. Patched only for resources, one file per Deployment
     (`resources-controller.yaml`, `resources-cainjector.yaml`, `resources-webhook.yaml`).
-    **What now consumes cert-manager is an open question** — it was installed for KServe's
-    webhook certificates, and KServe is gone; External Secrets issues its own webhook
-    certificate from its `cert-controller` and does not use it.
+    Its consumer is KServe: the controller's webhook serving certificate comes from a
+    self-signed `Issuer` in `kserve`, and every `serving.kserve.io` write fails closed
+    without it. External Secrets issues its own from `cert-controller` and does not use it.
   - `020-external-secrets/` — upstream's `external-secrets.yaml`, `curl`'d
     (`EXTERNAL_SECRETS_VER`, v0.19.2), patched from three strategic-merge files, one per
     Deployment (`controller.yaml`, `webhook.yaml`, `cert-controller.yaml`). Each does two
@@ -361,21 +364,70 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
     still spells it — `namespace: external-secrets` there matches nothing and fails the build.
     Still **not** settled: nothing in the tree creates a `SecretStore` or `ClusterSecretStore`,
     so which provider External Secrets reads from on a disconnected node is unrecorded.
-  Resources on both roots follow one rule: **memory request equals limit (1:1) and the CPU
+  - `030-kserve/` — upstream's `kserve.yaml`, `curl`'d (`KSERVE_VER`, v0.20.0; v0.21.0 was
+    tagged 2026-09-24 without release assets and adds a `kserve-kernelcachenode-agent`
+    DaemonSet with no nodeSelector). `kserve-cluster-resources.yaml` is not fetched: fourteen
+    serving runtimes, every image of which would be embedded. Only
+    `kserve-controller-manager` runs — it serves every webhook this node uses (InferenceService
+    defaulting and validation, the ClusterServingRuntime validator, the pod mutator that
+    injects the model). The other three workloads are separate binaries for features nothing
+    here creates and are deleted with `$patch: delete`: `llmisvc-controller-manager`
+    (LLMInferenceService; it also pins `runAsUser: 1000`), `kserve-localmodel-controller-manager`
+    and the `kserve-localmodelnode-agent` DaemonSet (the local model cache, off upstream, and
+    the agent selects a node label this node lacks and mounts a hostPath). Their CRDs, Services
+    and webhook configurations stay: each webhook matches only its own kinds, and the two
+    conversion webhooks on the LLM CRDs are called only when such an object exists.
+    `inferenceservice-config.yaml` rewrites three keys whole (each is one JSON string):
+    `deploy` → `Standard` (upstream ships Serverless, which needs Knative and Istio),
+    `ingress` → `disableIngressCreation: true` (an Ingress per InferenceService would name
+    `<isvc>-<ns>.example.com`, class istio), and `storageInitializer` → qualified image, 1:1 /
+    1:4 resources and **no `uidModelcar`**. That last one is the field that reaches the pods
+    KServe builds at run time: for an `oci://` model the pod mutator sets `runAsUser` to it on
+    the modelcar sidecar **and** on `kserve-container` (`pkg/utils/storage.go`), and upstream's
+    1010 is outside the range restricted-v2 assigns from, so every such pod would be refused.
+    Unset, the SCC gives the pod one UID, which is also what lets Triton follow the sidecar's
+    `/proc/<pid>/root` symlink to the model. The modelcar containers stay at 10m/15Mi, request
+    equal to limit: KServe sets both from one value, so CPU 1:4 cannot be expressed for them.
+    A modelcar image needs `sh`, `ln` and `sleep` and a non-empty `/models`, since the sidecar
+    runs `ln -sf /proc/$$/root/models … && sleep infinity`.
+    `storage-container.yaml` qualifies the `ClusterStorageContainer` image (the `images:`
+    transformer does not know `spec.container.image` is one) and sets its resources.
+    `controller.yaml` adds resources to both containers; upstream's manager is 100m/200Mi →
+    100m/300Mi, which breaks both ratios, and `kube-rbac-proxy` has none. `namespace.yaml`
+    creates `kserve` (upstream ships none) with upstream's `control-plane` label — the pod
+    mutator skips namespaces that carry it — plus `pod-security.kubernetes.io/enforce:
+    restricted` and `security.openshift.io/scc.podSecurityLabelSync: "false"`, so a wider SCC
+    granted to a service account there later cannot quietly loosen admission, and
+    cluster-policy-controller does not rewrite the label.
+  - `040-triton-runtime/` — one `ClusterServingRuntime`, `triton-igpu`: upstream's
+    `kserve-tritonserver` spec with the `-py3-igpu` image (`25.02`, **unverified against
+    JetPack 6.2.2** — NGC was unreachable from where it was chosen, and a tag whose bundled
+    CUDA the r36.5 driver cannot run fails only on hardware), one `nvidia.com/gpu`, no
+    `runAsUser`, the full restricted security context spelled out, memory 8Gi 1:1 and CPU
+    1 → 4, and model formats cut to TensorRT and ONNX. A ServingRuntime has no pod-level
+    `securityContext`, so anything pod-wide (a `supplementalGroups` for the GPU device nodes,
+    if hardware says it is needed) goes on the InferenceService. The TensorRT that loads a
+    `.plan` is the one inside this image, not JetPack's: engines are built with `trtexec` from
+    the same tag, on an Orin, and rebuilt when the tag moves.
+  Resources on every root follow one rule: **memory request equals limit (1:1) and the CPU
   limit is four times the request (1:4)**. Memory 1:1 means a pod is never evicted for growing
   past a request it was never going to stay under — it is OOM-killed at its own ceiling, a
   container problem rather than a node one. CPU 1:4 keeps burst room for the reconcile storm at
   start-up. This leaves the pods Burstable, not Guaranteed: Guaranteed needs the CPU request to
   equal the limit, which is the burst room itself. Upstream ships almost none of this —
   cert-manager sets nothing on any of its three, External Secrets sets `10m`/`32Mi` on one of
-  its three — so without the patches every one of these pods is BestEffort and first in line
-  for eviction.
+  its three, KServe sets ratios that fit neither rule and nothing on `kube-rbac-proxy` — so
+  without the patches most of these pods are BestEffort and first in line for eviction.
   The images embedded are **derived from the render**, not listed beside it: the build runs
   `manifest-images.sh` over the roots and embeds what it prints, so the version ARGs are the
-  only pin. `SERVICE_IMAGES` remains for an image no manifest names. Four today: cert-manager
-  ×3 (`quay.io/jetstack/...`) and one for External Secrets
+  only pin. `SERVICE_IMAGES` remains for an image no manifest names. Eight today: cert-manager
+  ×3 (`quay.io/jetstack/...`), one for External Secrets
   (`oci.external-secrets.io/external-secrets/external-secrets`, shared by all three of its
-  Deployments).
+  Deployments), `docker.io/kserve/kserve-controller` and `storage-initializer`,
+  `quay.io/brancz/kube-rbac-proxy` and `nvcr.io/nvidia/tritonserver:25.02-py3-igpu` — the
+  largest thing in the pipeline. A model given as `storageUri: oci://…` is named in no
+  `image:` field, so the scan does not see it: it goes in `SERVICE_IMAGES` until the scan
+  learns to read `storageUri`.
   The smoke test renders every root with `oc kustomize` — MicroShift will render the same roots
   at start-up, and a root that does not render is a component that is silently never applied —
   then checks: the workload set each root may contain (kustomize already fails the build on a
@@ -386,9 +438,19 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   clientConfig, a service DNS name inside an argument — since which namespaces a namespace
   transformer reaches depends on the kustomize version linked into whatever renders the root,
   and a field spec a version does not carry is a silent no-op rather than an error, that
-  every container has requests and limits **and that the ratios hold** (checked by arithmetic
-  over the render rather than by grepping the numbers, so an edit cannot quietly break one),
-  and that every image is registry-qualified and embedded. It prints `du -sh` of the cache:
+  `inferenceservice-config` says Standard, no Ingress and no `uidModelcar` (read per key:
+  upstream's `_example` key mentions every setting in comments), that **every pod template
+  and every serving-runtime container in every root is admissible under restricted-v2 and
+  Pod Security restricted** — no pinned UID/GID/`fsGroup`, no host access or privilege,
+  capabilities dropped to `ALL`, `runAsNonRoot` and seccomp `RuntimeDefault` on the container
+  or the pod — and that `kserve` carries the enforce label, that every container has requests
+  and limits **and that the ratios hold** (checked by arithmetic over the render rather than
+  by grepping the numbers, so an edit cannot quietly break one; serving runtimes included),
+  that every image is registry-qualified and embedded, and that the three spellings of the
+  KServe release (controller, `ClusterStorageContainer`, ConfigMap) share one tag. The
+  admission check reads the render, so the pods KServe builds at run time are outside it:
+  whether a predictor pod is admitted, and whether its SCC-assigned UID can open the GPU, is
+  only answered on hardware. It prints `du -sh` of the cache:
   the cache is paid for twice on the eMMC, once in `/usr` and once when
   `copy-embedded-images.service` replays it into containers-storage under `/var`.
 - `k3s/` — `Containerfile`, `config.toml`, `stage-assets.sh`, `smoke-test.sh`, all still here
@@ -555,10 +617,24 @@ hardware as of this writing.
    round trip too — `oc get deploy -A -o jsonpath` over `resources` — since nothing between the
    render and the node re-checks them.
    `journalctl -u microshift | grep -i kustomization` is where a root that is still
-   retrying says so; it retries for ten minutes and then gives up quietly.
-5. Decide what serves the model, now that KServe and Triton are out of the tree, and what
-   External Secrets reads from on a node with no network — until there is a `SecretStore` it is
-   three pods that do nothing.
+   retrying says so; it retries for ten minutes and then gives up quietly. `040` is the one
+   to watch there: it needs KServe's webhook serving, which needs cert-manager to have issued
+   its certificate, all inside that window on a first boot.
+   `oc get pods -n kserve` (one, Running), `oc get clusterservingruntime triton-igpu`, and
+   `oc get pods -A -o custom-columns=NS:.metadata.namespace,N:.metadata.name,SCC:.metadata.annotations.openshift\.io/scc`
+   — every services pod should say `restricted-v2`.
+5. Serve a model, in two steps. First `pvc://`, which needs no model image: a PVC on the
+   topolvm class, a Triton model repository `oc cp`'d into it, an InferenceService pointing
+   at it. That proves the Triton tag runs on r36.5 and the GPU is reachable from a pod running
+   as an SCC-assigned UID: in the predictor, `id` and `ls -ln /dev/nvhost-ctrl-gpu /dev/nvmap`,
+   and the Triton log saying the model loaded on the GPU. L4T normally makes those nodes
+   `root:video 0660`, which an arbitrary UID cannot open; the fixes are
+   `supplementalGroups: [<video gid>]` on the InferenceService (restricted-v2 allows any
+   supplemental group) or CRI-O's `device_ownership_from_security_context`. Then `oci://`
+   with an embedded modelcar image, which is what proves the `uidModelcar` change: the pod
+   must be admitted, and `oc describe rs` is where a refusal would show.
+   Separately, decide what External Secrets reads from on a node with no network — until
+   there is a `SecretStore` it is three pods that do nothing.
 6. k3s variant — dead in CI. Reviving it starts with writing `build-k3s.yml` again; then
    confirm `k3s.service` comes up enforcing, that `k3s-stage-assets.service` staged the images
    before it, that `k3s ctr images ls` shows the airgap set with no registry reachable, and
@@ -567,8 +643,10 @@ hardware as of this writing.
    unit pointing at the air-gapped registry, greenboot health checks, image signature policy in
    `/etc/containers/policy.json`.
 
-Open decisions to confirm with the maintainer before implementing: what replaces KServe and
-Triton for serving the model, and whether cert-manager still has a consumer once they are gone;
+Open decisions to confirm with the maintainer before implementing: which Triton `-igpu` tag
+matches JetPack 6.2.2, and whether 8Gi per GPU slice is the right size once a model is measured;
+where InferenceServices live (a namespace of their own, created with the first one) and whether
+models get a layer above `services/`, so a model change does not re-embed Triton;
 which provider External Secrets reads from on a disconnected node;
 whether the NVMe upgrade in decision 3 happens before real application images and a model store
 land on the node; whether to keep the entitlement-secret approach or stand up a self-hosted RHEL
@@ -631,6 +709,14 @@ sizes are guesses) survive contact with the hardware.
   on the render.
 - An apostrophe inside an `awk` program ends the single-quoted shell word around it, and the
   error arrives as a bash syntax error pointing at `$0`. No contractions in awk comments.
+- The render quotes a bare number (`cpu: "4"`), and awk reads `"4"` as 0 — the CPU ratio check
+  passed any quoted pair until it stripped the quotes. It also counted one container per pod:
+  the rule ending the container list fired on the dash line that starts each container, which
+  sits at the list key indent too. Both stayed hidden while every pod had one container and no
+  quoted CPU; test a check against a render built to fail it.
+- A render-time admission check cannot see what a webhook injects at run time. KServe's pod
+  mutator writes `uidModelcar` into two containers of every `oci://` model pod; the only
+  handle on that is the ConfigMap key, so that is what gets checked.
 
 **Git / delivery.** Work lands on a branch and a pull request, not by hand-copying files:
 develop on the branch named in the session, commit with a message that says *why*, push, and

@@ -19,6 +19,12 @@ RUN curl -fsSL \
       -o /etc/microshift/manifests.d/020-external-secrets/external-secrets.yaml \
       "https://github.com/external-secrets/external-secrets/releases/download/${EXTERNAL_SECRETS_VER}/external-secrets.yaml"
 
+# kserve.yaml only: kserve-cluster-resources.yaml carries fourteen serving
+# runtimes, every image of which would be embedded. 040-triton-runtime is ours.
+ARG KSERVE_VER=v0.20.0
+RUN curl -fsSL -o /etc/microshift/manifests.d/030-kserve/kserve.yaml \
+      "https://github.com/kserve/kserve/releases/download/${KSERVE_VER}/kserve.yaml"
+
 # Embed what the manifests name, rendered, not a list kept beside them.
 # SERVICE_IMAGES is for an image no manifest names. && and the exit in the loop:
 # a `;` chain takes the last status and would hide a copy that failed earlier.

@@ -1,0 +1,31 @@
+# Resources for the reason given in 010-cert-manager/resources-controller.yaml:
+# memory 1:1, CPU 1:4. Upstream sets 100m/200Mi -> 100m/300Mi on the manager,
+# which breaks both ratios, and nothing at all on kube-rbac-proxy.
+#
+# The security context needs no change: both containers already run non-root,
+# drop every capability, forbid privilege escalation and pin no UID.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kserve-controller-manager
+  namespace: kserve
+spec:
+  template:
+    spec:
+      containers:
+        - name: manager
+          resources:
+            requests:
+              cpu: 100m
+              memory: 300Mi
+            limits:
+              cpu: 400m
+              memory: 300Mi
+        - name: kube-rbac-proxy
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 40m
+              memory: 64Mi

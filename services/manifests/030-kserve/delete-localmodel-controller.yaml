@@ -1,0 +1,9 @@
+# LocalModelCache, which pre-downloads models onto nodes. Off in
+# inferenceservice-config (localModel.enabled: false), and here the model is
+# inside the OS image, so there is nothing to download.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kserve-localmodel-controller-manager
+  namespace: kserve
+$patch: delete

@@ -1,0 +1,62 @@
+# KServe's own configuration. A strategic merge on a ConfigMap merges by key, so
+# keys not named here keep upstream's values, but each key is one JSON string:
+# a key that is touched is given whole. Upstream's text is kept verbatim apart
+# from what the comments call out; diff it against the release on a bump.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inferenceservice-config
+  namespace: kserve
+data:
+  # Upstream ships Serverless, which needs Knative Serving and Istio. Standard
+  # is plain Deployment + Service, reconciled by the KServe controller alone.
+  deploy: |-
+    {
+      "defaultDeploymentMode": "Standard"
+    }
+  # disableIngressCreation is the only change. Standard mode would otherwise
+  # create an Ingress per InferenceService, host <name>-<ns>.example.com and
+  # class istio: a name nothing on the segment resolves, a class nothing here
+  # claims. An in-cluster caller uses the predictor Service; one off the node
+  # needs a Route made for it. The gateway fields stay because NewIngressConfig
+  # rejects an empty ingressGateway even in Standard mode.
+  ingress: |-
+    {
+        "enableGatewayApi": false,
+        "kserveIngressGateway": "kserve/kserve-ingress-gateway",
+        "ingressGateway" : "knative-serving/knative-ingress-gateway",
+        "localGateway" : "knative-serving/knative-local-gateway",
+        "localGatewayService" : "knative-local-gateway.istio-system.svc.cluster.local",
+        "ingressDomain"  : "example.com",
+        "ingressClassName" : "istio",
+        "domainTemplate": "{{ .Name }}-{{ .Namespace }}.{{ .IngressDomain }}",
+        "urlScheme": "http",
+        "disableIstioVirtualHost": false,
+        "disableIngressCreation": true,
+        "disableHTTPRouteTimeout": false
+    }
+  # Three changes.
+  #   - image fully qualified, as in storage-container.yaml.
+  #   - resources at memory 1:1, CPU 1:4 (upstream: 100Mi -> 1Gi, 100m -> 1).
+  #   - no uidModelcar. For an oci:// model the pod mutator sets runAsUser to
+  #     this value on the modelcar sidecar and on kserve-container both
+  #     (pkg/utils/storage.go), and restricted-v2 refuses any UID outside the
+  #     namespace range, so upstream's 1010 gets every model pod refused. Left
+  #     unset, the SCC assigns one UID to the whole pod, which is also what
+  #     lets kserve-container read the model through /proc/<pid>/root of the
+  #     sidecar: that needs both processes to run as the same user.
+  # The modelcar containers themselves stay at 10m/15Mi: KServe sets request
+  # and limit from one value, so CPU 1:4 cannot be expressed for them.
+  storageInitializer: |-
+    {
+        "image" : "docker.io/kserve/storage-initializer:v0.20.0",
+        "memoryRequest": "1Gi",
+        "memoryLimit": "1Gi",
+        "cpuRequest": "250m",
+        "cpuLimit": "1",
+        "caBundleConfigMapName": "",
+        "caBundleVolumeMountPath": "/etc/ssl/custom-certs",
+        "enableModelcar": true,
+        "cpuModelcar": "10m",
+        "memoryModelcar": "15Mi"
+    }

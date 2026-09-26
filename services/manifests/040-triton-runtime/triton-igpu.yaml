@@ -1,0 +1,69 @@
+# The model server: NVIDIA Triton on Tegra's integrated GPU. Upstream's
+# kserve-tritonserver lives in kserve-cluster-resources.yaml beside thirteen
+# other runtimes whose images would all have to be embedded, so that file is
+# not applied and this is its spec, changed where the node demands:
+#
+#   - the -igpu build. The plain image is for discrete GPUs and finds none
+#     here. 25.02 is unverified against JetPack 6.2.2 / L4T r36.5: nothing in
+#     this pipeline can reach NGC's support matrix, and a tag whose bundled
+#     CUDA the r36.5 driver cannot run fails only on hardware. The tag also
+#     fixes the TensorRT version, and a .plan file only loads in the TensorRT
+#     that built it, so engines are built with trtexec from this same image, on
+#     an Orin, and rebuilt when the tag moves.
+#   - one nvidia.com/gpu, one of the four time slices the device plugin
+#     publishes. Upstream requests none, and Triton would start on the CPU.
+#   - no runAsUser (upstream pins 1000): restricted-v2 assigns one. The rest of
+#     the security context is what restricted-v2 and Pod Security restricted
+#     require, spelled out so the smoke test can check it on the render.
+#     There is no pod-level securityContext on a ServingRuntime; anything
+#     pod-wide goes on the InferenceService.
+#   - memory 1:1, CPU 1:4, sized for the model: the iGPU has no memory of its
+#     own, so CUDA allocations come out of the same RAM the cgroup counts.
+#     Four slices at 8Gi is the whole 32 GB SOM; this and the plugin's replica
+#     count come down together once a real model is measured.
+#   - model formats cut to TensorRT and ONNX, the two an image-recognition
+#     model ships as. No version on tensorrt: upstream says 8, this image
+#     carries 10, and a plan is tied to the image anyway.
+apiVersion: serving.kserve.io/v1alpha1
+kind: ClusterServingRuntime
+metadata:
+  name: triton-igpu
+spec:
+  protocolVersions:
+    - v2
+    - grpc-v2
+  supportedModelFormats:
+    - name: tensorrt
+      autoSelect: true
+      priority: 1
+    - name: onnx
+      version: "1"
+      autoSelect: true
+      priority: 1
+  containers:
+    - name: kserve-container
+      image: nvcr.io/nvidia/tritonserver:25.02-py3-igpu
+      args:
+        - tritonserver
+        - --model-store=/mnt/models
+        - --grpc-port=9000
+        - --http-port=8080
+        - --allow-grpc=true
+        - --allow-http=true
+      resources:
+        requests:
+          cpu: "1"
+          memory: 8Gi
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "4"
+          memory: 8Gi
+          nvidia.com/gpu: "1"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
