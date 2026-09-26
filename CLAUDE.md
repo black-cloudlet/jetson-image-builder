@@ -636,8 +636,13 @@ sizes are guesses) survive contact with the hardware.
   -p '{}' -o json` parses it into JSON without contacting a server, and `jq` (installed by the
   microshift layer) queries that. The awk parsers this replaced counted indentation and broke
   on list shapes kustomize is free to change. Nor do they re-assert what already fails the
-  build — a `COPY`, a `systemctl enable`, a `curl -f`, a `dnf install` — or what a lower
-  layer's test covered: each layer builds on the digest of one that passed.
+  build — a `COPY`, a `curl -f`, a `dnf install` — or what a lower layer's test covered: each
+  layer builds on the digest of one that passed. `systemctl enable` is **not** on that list: on
+  a unit whose `[Install]` section is missing or misspelt it warns and exits 0, so the
+  `.wants/` symlink is still checked. Neither is agreement between two files the build copies
+  separately, such as the `lo` keyfile's address and MicroShift's `nodeIP`.
+- jq's `a // b` treats `false` the same as missing. For a field where an explicit `false` has to
+  win over a fallback, like a container's `runAsNonRoot` over the pod's, test for `null`.
 
 **Git / delivery.** Work lands on a branch and a pull request, not by hand-copying files:
 develop on the branch named in the session, commit with a message that says *why*, push, and

@@ -10,6 +10,13 @@
 set -euo pipefail
 
 fail() { echo "$*"; exit 1; }
+cache=/usr/lib/containers-image-cache
+not_embedded() {
+	echo "$*"
+	echo "-- $cache/mapping.txt"
+	sed 's/^/   /' "$cache/mapping.txt"
+	exit 1
+}
 
 echo "== renders =="
 # oc's kustomize is the closest thing in the image to the one MicroShift links
@@ -26,8 +33,14 @@ for root in "${roots[@]}"; do
 	echo "   $name: $(jq length "$render/$name.json") objects"
 done
 
-# Prefixed to the jq programs below: every workload object in a render.
-W='def workloads: .[] | select(.kind | test("^(Deployment|DaemonSet|StatefulSet)$"));'
+# Prefixed to the jq programs below: every object in a render that makes pods,
+# and the pod spec inside it, wherever its kind keeps one.
+W='def workloads:
+	.[] | select(.kind | test("^(Deployment|DaemonSet|StatefulSet|Job|CronJob|Pod)$"));
+def podspec:
+	if .kind == "Pod" then .spec
+	elif .kind == "CronJob" then .spec.jobTemplate.spec.template.spec
+	else .spec.template.spec end;'
 
 echo "== workloads =="
 # kustomize fails the build on a patch that matches nothing, so a rename
@@ -87,18 +100,25 @@ echo "== external secrets runs as an SCC-assigned uid =="
 # that names its own, so the Deployments would be admitted and every pod they
 # create refused. The patches delete the field with an explicit null, which is
 # invisible in the patch file if it stops matching — kustomize would fail the
-# build on that, but not on upstream adding the field somewhere new.
-pinned=$(jq -r "$W"' workloads | select([.. | objects | has("runAsUser")] | any)
+# build on that, but not on upstream adding the field somewhere new, so every
+# object is searched, not only the workloads named above. CRDs are skipped:
+# their schemas describe the field without setting it.
+pinned=$(jq -r '.[] | select(.kind != "CustomResourceDefinition")
+	| select([.. | objects | has("runAsUser")] | any)
 	| "\(.kind)/\(.metadata.name)"' "$eso")
 [[ -z $pinned ]] || fail "still pins a UID, which restricted-v2 will refuse:" $pinned
 echo "   no runAsUser in the render"
 # Deleting runAsUser must not have taken runAsNonRoot with it: without it the
 # SCC is the only thing between this and a root container. Per container,
-# falling back to the pod, the way the kubelet reads it.
-rootable=$(jq -r "$W"' workloads | .metadata.name as $w | .spec.template.spec
+# falling back to the pod only where the container does not set it at all, the
+# way the kubelet reads it. Not jq's `//`: it treats an explicit false as unset
+# and would take the pod's true over it.
+rootable=$(jq -r "$W"' workloads | .metadata.name as $w | podspec
 	| .securityContext.runAsNonRoot as $pod
 	| (.containers + (.initContainers // []))[]
-	| select((.securityContext.runAsNonRoot // $pod) != true) | "\($w)/\(.name)"' "$eso")
+	| select((if .securityContext.runAsNonRoot == null then $pod
+		else .securityContext.runAsNonRoot end) != true)
+	| "\($w)/\(.name)"' "$eso")
 [[ -z $rootable ]] || fail "runAsNonRoot is not true on:" $rootable
 echo "   runAsNonRoot: true on every container"
 
@@ -114,7 +134,7 @@ for root in "${roots[@]}"; do
 	out=$(jq -r "$W"'
 		def cpu: tostring | if endswith("m") then .[:-1] | tonumber else tonumber * 1000 end;
 		workloads | .metadata.name as $w
-		| (.spec.template.spec | .containers + (.initContainers // []))[]
+		| (podspec | .containers + (.initContainers // []))[]
 		| .resources as $r | "\($w)/\(.name): " +
 		if [$r.requests.cpu, $r.limits.cpu, $r.requests.memory, $r.limits.memory]
 			| any(. == null) then
@@ -124,6 +144,11 @@ for root in "${roots[@]}"; do
 		elif ($r.limits.cpu | cpu) != 4 * ($r.requests.cpu | cpu) then
 			"cpu \($r.requests.cpu) -> \($r.limits.cpu), want limit == 4x request"
 		else "ok" end' "$render/$name.json")
+	# A root of plain objects, a SecretStore say, has nothing to size.
+	if [[ -z $out ]]; then
+		echo "   $name: no workloads"
+		continue
+	fi
 	if grep -v ': ok$' <<<"$out" | sed "s|^|$name: |" | grep .; then
 		exit 1
 	fi
@@ -138,7 +163,6 @@ images=$(/opt/microshift/manifest-images.sh "${roots[@]}") \
 	|| fail "/opt/microshift/manifest-images.sh failed"
 [[ -n $images ]] || fail "the manifest roots name no images at all"
 
-cache=/usr/lib/containers-image-cache
 # embed_image.sh keys the cache on `echo "$ref" | sha256sum`, newline included.
 while read -r img; do
 	# CRI-O resolves a short name against unqualified-search-registries
@@ -153,11 +177,23 @@ while read -r img; do
 			"give it a registry host, or the node will try to pull it"
 	fsha=$(echo "$img" | sha256sum | awk '{ print $1 }')
 	[[ -f $cache/$fsha/manifest.json ]] \
-		|| fail "a manifest names $img, which is not embedded;" \
+		|| not_embedded "a manifest names $img, which is not embedded;" \
 			"the build embeds what this same scan prints, check its log"
 	echo "   embedded: $img"
 done <<< "$images"
 
+echo "== embedded images =="
+# The whole mapping, not only what the manifests name: SERVICE_IMAGES adds
+# images no manifest does, and this is the file copy_embedded_images.sh replays
+# at boot. Cumulative — the control plane came from the layer below.
+if [[ ! -s $cache/mapping.txt ]]; then
+	echo "missing: $cache/mapping.txt"
+	ls -la "$cache" 2>&1 | sed 's/^/   /'
+	exit 1
+fi
+while IFS=, read -r img sha; do
+	[[ -f $cache/$sha/manifest.json ]] || not_embedded "no manifest.json for $img under $cache/$sha"
+done < "$cache/mapping.txt"
 # Printed, not asserted: the cache is copied into containers-storage at first
 # boot, so every embedded image is paid for twice on a 40 GiB root. The number
 # belongs in the log — it is the first thing to look at when a build stops

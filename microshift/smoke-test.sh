@@ -5,17 +5,56 @@
 #
 # This proves the image was assembled correctly. It proves nothing about the
 # GPU or the cluster — only a boot on real hardware does that. The base image
-# was checked by the layers below, and what the Containerfile COPYs, enables or
-# installs fails the build by itself, so neither is re-checked here.
+# was checked by the layers below, and a file the Containerfile COPYs or a
+# package it installs fails the build by itself when it is missing, so neither
+# is re-checked here.
 set -euo pipefail
 
 fail() { echo "$*"; exit 1; }
+# missing <what> <path>...: names what it looked for and lists where it should
+# have been.
+missing() {
+	echo "missing: $1"
+	shift
+	for p in "$@"; do
+		echo "-- $p"
+		ls -la "$p" 2>&1 | sed 's/^/   /'
+	done
+	exit 1
+}
+cache=/usr/lib/containers-image-cache
+not_embedded() {
+	echo "$*"
+	echo "-- $cache/mapping.txt"
+	sed 's/^/   /' "$cache/mapping.txt"
+	exit 1
+}
+
+echo "== units enabled =="
+# `systemctl enable` on a unit whose [Install] section is missing or misspelt
+# only warns and exits 0, so the build does not notice. make-rshared is written
+# in the Containerfile itself, and nothing Requires= it.
+wants=/etc/systemd/system/multi-user.target.wants
+for unit in microshift microshift-make-rshared; do
+	[[ -L $wants/$unit.service ]] || missing "$wants/$unit.service" "$wants"
+done
+
+echo "== node ip on lo =="
+# Two files in git that must name the same address, and nothing in the build
+# compares them. If they disagree, nodeIP is an address no interface carries
+# and MicroShift fails to start, or sysconfwatch keeps restarting it.
+nm=/usr/lib/NetworkManager/system-connections/stable-microshift.nmconnection
+lo=$(sed -n 's|^address1=\([^/,]*\).*|\1|p' "$nm")
+node=$(awk '$1 == "nodeIP:" { print $2 }' /etc/microshift/config.d/*.yaml)
+[[ -n $lo && $lo == "$node" ]] \
+	|| fail "lo carries '$lo' ($nm) but nodeIP is '$node' (/etc/microshift/config.d)"
+echo "   nodeIP $node is on lo"
 
 echo "== nvidia runtime for cri-o =="
 # nvidia-ctk renames a .conf drop-in to .toml and still exits 0, so only a check
-# spelling the name notices. On a miss, list the directory.
+# spelling the name notices.
 f=/etc/crio/crio.conf.d/99-nvidia.toml
-[[ -s $f ]] || { echo "missing: $f"; ls -la "${f%/*}"; exit 1; }
+[[ -s $f ]] || missing "$f" "${f%/*}"
 
 echo "== gpu time slicing =="
 # A patch that stops matching is a no-op in kustomize, not an error, and a
@@ -43,8 +82,9 @@ n=$(jq "$P"' [pod | .containers[]] | length' <<<"$r")
 [[ $n == 1 ]] || fail "the pod has $n containers, expected 1: a merge key" \
 	"that stopped matching appends one instead of patching upstream"
 
-cfg=$(jq -r "$P"' pod | .containers[0].env[]? | select(.name == "CONFIG_FILE") | .value' <<<"$r")
-[[ -n $cfg ]] || fail "no CONFIG_FILE in the render: the patch never reached the container"
+cfg=$(jq -r "$P"' pod | .containers[0].env[]? | select(.name == "CONFIG_FILE") | .value // empty' <<<"$r")
+[[ -n $cfg ]] || fail "no CONFIG_FILE with a literal value in the render:" \
+	"the patch never reached the container"
 
 vol=$(jq -r --arg dir "${cfg%/*}" "$P"' pod
 	| .containers[0].volumeMounts[]? | select(.mountPath == $dir) | .name' <<<"$r")
@@ -70,11 +110,10 @@ jq -e "$P"' pod | .containers[0].volumeMounts[]?
 	|| fail "nothing mounts /var/lib/kubelet/device-plugins: the plugin cannot register with kubelet"
 
 echo "== embedded images =="
-cache=/usr/lib/containers-image-cache
-[[ -s $cache/mapping.txt ]] || { echo "missing: $cache/mapping.txt"; ls -la "$cache"; exit 1; }
+[[ -s $cache/mapping.txt ]] || missing "$cache/mapping.txt" "$cache"
 echo "embedded: $(wc -l < "$cache/mapping.txt") images"
 while IFS=, read -r img sha; do
-	[[ -f $cache/$sha/manifest.json ]] || fail "missing embedded image: $img"
+	[[ -f $cache/$sha/manifest.json ]] || not_embedded "no manifest.json for $img under $cache/$sha"
 done < "$cache/mapping.txt"
 
 # Whether the images the manifests will ask for are actually in the cache.
@@ -87,9 +126,10 @@ images=$(/opt/microshift/manifest-images.sh \
 	/usr/lib/microshift/manifests /usr/lib/microshift/manifests.d/*/ \
 	/etc/microshift/manifests /etc/microshift/manifests.d/*/) \
 	|| fail "/opt/microshift/manifest-images.sh failed"
+[[ -n $images ]] || fail "the manifest roots name no images at all; the device plugin's should be there"
 while read -r img; do
 	fsha=$(echo "$img" | sha256sum | awk '{ print $1 }')
-	[[ -f $cache/$fsha/manifest.json ]] || fail "manifest image was not embedded: $img"
+	[[ -f $cache/$fsha/manifest.json ]] || not_embedded "manifest image was not embedded: $img"
 	echo "   embedded: $img"
 done <<<"$images"
 
