@@ -444,7 +444,8 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   at start-up, and a root that does not render is a component that is silently never applied —
   then checks: the workload set each root may contain (kustomize already fails the build on a
   patch that matches nothing, so this is aimed at a workload upstream *adds*), that no
-  `runAsUser` survives in the External Secrets render and `runAsNonRoot: true` still does, that
+  `runAsUser` survives in the External Secrets render and `runAsNonRoot: true` still holds on
+  every container, that
   the External Secrets render creates the `external-secrets` namespace and that **nothing
   outside its CRDs still says `default`** in any spelling — metadata, a subject, a webhook
   clientConfig, a service DNS name inside an argument — since which namespaces a namespace
@@ -455,8 +456,9 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   and every serving-runtime container in every root is admissible under restricted-v2 and
   Pod Security restricted** — no pinned UID/GID/`fsGroup`, no host access or privilege,
   capabilities dropped to `ALL`, `runAsNonRoot` and seccomp `RuntimeDefault` on the container
-  or the pod — and that every container has requests and limits **and that the ratios hold** (checked by arithmetic over the render rather than
-  by grepping the numbers, so an edit cannot quietly break one; serving runtimes included),
+  or the pod — and that every container has requests and limits **and that the ratios hold**
+  (checked by arithmetic over the render rather than by grepping the numbers, so an edit
+  cannot quietly break one; serving runtimes included),
   that every image is registry-qualified and embedded, that the render carries no
   `ClusterStorageContainer` (a delete that stops matching already fails the build; this is
   for one upstream adds under another name), and that the two spellings of the KServe
@@ -722,11 +724,17 @@ sizes are guesses) survive contact with the hardware.
   on the render.
 - An apostrophe inside an `awk` program ends the single-quoted shell word around it, and the
   error arrives as a bash syntax error pointing at `$0`. No contractions in awk comments.
-- The render quotes a bare number (`cpu: "4"`), and awk reads `"4"` as 0 — the CPU ratio check
-  passed any quoted pair until it stripped the quotes. It also counted one container per pod:
-  the rule ending the container list fired on the dash line that starts each container, which
-  sits at the list key indent too. Both stayed hidden while every pod had one container and no
-  quoted CPU; test a check against a render built to fail it.
+- Smoke tests do not read a render's YAML line by line. `oc patch --local -f - --type=merge
+  -p '{}' -o json` parses it into JSON without contacting a server, and `jq` (installed by the
+  microshift layer) queries that. The awk parsers this replaced counted indentation and broke
+  on list shapes kustomize is free to change. Nor do they re-assert what already fails the
+  build — a `COPY`, a `curl -f`, a `dnf install` — or what a lower layer's test covered: each
+  layer builds on the digest of one that passed. `systemctl enable` is **not** on that list: on
+  a unit whose `[Install]` section is missing or misspelt it warns and exits 0, so the
+  `.wants/` symlink is still checked. Neither is agreement between two files the build copies
+  separately, such as the `lo` keyfile's address and MicroShift's `nodeIP`.
+- jq's `a // b` treats `false` the same as missing. For a field where an explicit `false` has to
+  win over a fallback, like a container's `runAsNonRoot` over the pod's, test for `null`.
 - A render-time admission check cannot see what a webhook injects at run time. KServe's pod
   mutator writes `uidModelcar` into two containers of every `oci://` model pod; the only
   handle on that is the ConfigMap key, so that is what gets checked.
