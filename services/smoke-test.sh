@@ -295,21 +295,6 @@ check_security() {
 for root in "${roots[@]}"; do
 	check_security "$(basename "$root")" "${render}/$(basename "$root").yaml"
 done
-# Pod Security is enforced on the kserve namespace, not only audited, and the
-# label syncer is kept off it; without the second the first can be rewritten.
-for label in 'pod-security.kubernetes.io/enforce: restricted' \
-	'security.openshift.io/scc.podSecurityLabelSync: "false"'; do
-	if ! awk -v want="    $label" 'BEGIN { RS = "\n---\n" }
-		/(^|\n)kind: Namespace(\n|$)/ && /\n  name: kserve(\n|$)/ {
-			n = split($0, line, "\n")
-			for (i = 1; i <= n; i++) if (line[i] == want) found = 1
-		}
-		END { exit !found }' "$ksv"; then
-		echo "Namespace/kserve does not carry ${label}"
-		exit 1
-	fi
-	echo "   Namespace/kserve: ${label}"
-done
 
 echo "== requests and limits =="
 # Upstream ships almost none of these, so every pod would be BestEffort and the

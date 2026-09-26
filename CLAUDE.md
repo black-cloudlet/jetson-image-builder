@@ -402,10 +402,13 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
     `controller.yaml` adds resources to both containers; upstream's manager is 100m/200Mi →
     100m/300Mi, which breaks both ratios, and `kube-rbac-proxy` has none. `namespace.yaml`
     creates `kserve` (upstream ships none) with upstream's `control-plane` label — the pod
-    mutator skips namespaces that carry it — plus `pod-security.kubernetes.io/enforce:
-    restricted` and `security.openshift.io/scc.podSecurityLabelSync: "false"`, so a wider SCC
-    granted to a service account there later cannot quietly loosen admission, and
-    cluster-policy-controller does not rewrite the label.
+    mutator skips namespaces that carry it, which keeps KServe's own pod out of the webhook it
+    serves and also means an InferenceService created in `kserve` gets no model injected, so
+    they belong in a namespace of their own. No Pod Security labels: admission is MicroShift's
+    SCC, as in every other root. An `enforce: restricted` label (plus the label-sync opt-out
+    it needs) was tried and removed — it only differs from `restricted-v2` once someone grants
+    a wider SCC in the namespace, which nothing in this pipeline does, and the render check
+    below is what actually keeps the manifests admissible.
   - `040-triton-runtime/` — one `ClusterServingRuntime`, `triton-igpu`: upstream's
     `kserve-tritonserver` spec with the `-py3-igpu` image (`25.02`, **unverified against
     JetPack 6.2.2** — NGC was unreachable from where it was chosen, and a tag whose bundled
@@ -452,8 +455,7 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   and every serving-runtime container in every root is admissible under restricted-v2 and
   Pod Security restricted** — no pinned UID/GID/`fsGroup`, no host access or privilege,
   capabilities dropped to `ALL`, `runAsNonRoot` and seccomp `RuntimeDefault` on the container
-  or the pod — and that `kserve` carries the enforce label, that every container has requests
-  and limits **and that the ratios hold** (checked by arithmetic over the render rather than
+  or the pod — and that every container has requests and limits **and that the ratios hold** (checked by arithmetic over the render rather than
   by grepping the numbers, so an edit cannot quietly break one; serving runtimes included),
   that every image is registry-qualified and embedded, that the render carries no
   `ClusterStorageContainer` (a delete that stops matching already fails the build; this is
