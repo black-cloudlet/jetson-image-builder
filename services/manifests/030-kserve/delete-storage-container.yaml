@@ -1,0 +1,13 @@
+# The storage initializer, injected to download a model from s3://, gs://, hf://
+# or http(s)://. A model here arrives as oci:// (the modelcar sidecar) or pvc://
+# (mounted straight into kserve-container), and neither path looks this up, so
+# kept it would only embed an image nothing runs. With no ClusterStorageContainer
+# KServe falls back to the storageInitializer key of inferenceservice-config,
+# whose image is not embedded: a downloading URI fails at the pull, which is
+# where it would fail anyway on a node with no network.
+apiVersion: serving.kserve.io/v1alpha1
+kind: ClusterStorageContainer
+metadata:
+  name: default
+  namespace: kserve
+$patch: delete

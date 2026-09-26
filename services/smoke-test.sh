@@ -166,8 +166,8 @@ if isvc_config storageInitializer | grep -n uidModelcar; then
 	exit 1
 fi
 echo "   storageInitializer: no uidModelcar"
-# The ConfigMap copy of the storage initializer is a JSON string, which the
-# image scan below cannot see, so its reference is checked here instead.
+# The storage initializer is named only in this JSON string, which the image
+# scan below cannot see and nothing embeds, so its reference is checked here.
 si_image=$(isvc_config storageInitializer |
 	sed -n 's/^ *"image" *: *"\([^"]*\)".*/\1/p')
 if [[ $si_image != docker.io/kserve/storage-initializer:* ]]; then
@@ -175,6 +175,19 @@ if [[ $si_image != docker.io/kserve/storage-initializer:* ]]; then
 	exit 1
 fi
 echo "   storageInitializer image: ${si_image}"
+# Deleted, and a delete that stops matching fails the build; this is for one
+# upstream adds under another name. Any ClusterStorageContainer in the render
+# names an image the build would then embed for downloads that never happen.
+csc=$(awk 'BEGIN { RS = "\n---\n" } /(^|\n)kind: ClusterStorageContainer(\n|$)/ {
+	n = split($0, line, "\n")
+	for (i = 1; i <= n; i++) if (line[i] ~ /^  name: /) print line[i]
+}' "$ksv")
+if [[ -n $csc ]]; then
+	echo "the kserve render carries a ClusterStorageContainer:"
+	echo "$csc" | sed 's/^/   /'
+	exit 1
+fi
+echo "   no ClusterStorageContainer"
 
 echo "== restricted-v2 and pod security =="
 # What MicroShift's SCC and Pod Security restricted require of every pod
@@ -409,15 +422,15 @@ while read -r img; do
 	echo "   embedded: ${img}"
 done <<< "$images"
 
-# The controller, the storage initializer in the ClusterStorageContainer and
-# the one in inferenceservice-config are three spellings of one release; the
-# last two are patched by hand and do not move with KSERVE_VER.
+# The controller and the storage initializer in inferenceservice-config are
+# two spellings of one release; the second is patched by hand and does not
+# move with KSERVE_VER.
 kserve_tags=$(printf '%s\n%s\n' "$images" "$si_image" |
 	sed -n 's|^docker\.io/kserve/[^:]*:\(.*\)$|\1|p' | sort -u)
 if [[ $(wc -l <<< "$kserve_tags") -ne 1 ]]; then
 	echo "docker.io/kserve images do not share one tag:"
 	echo "$kserve_tags" | sed 's/^/   /'
-	echo "bump KSERVE_VER, storage-container.yaml and inferenceservice-config.yaml together"
+	echo "bump KSERVE_VER and inferenceservice-config.yaml together"
 	exit 1
 fi
 echo "   docker.io/kserve images all at ${kserve_tags}"

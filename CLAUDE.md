@@ -390,8 +390,15 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
     equal to limit: KServe sets both from one value, so CPU 1:4 cannot be expressed for them.
     A modelcar image needs `sh`, `ln` and `sleep` and a non-empty `/models`, since the sidecar
     runs `ln -sf /proc/$$/root/models … && sleep infinity`.
-    `storage-container.yaml` qualifies the `ClusterStorageContainer` image (the `images:`
-    transformer does not know `spec.container.image` is one) and sets its resources.
+    `delete-storage-container.yaml` deletes upstream's `ClusterStorageContainer`, and with
+    it the only `image:` field naming `docker.io/kserve/storage-initializer` (90.6 MiB
+    compressed on arm64). The storage initializer downloads a model from `s3://`, `gs://`,
+    `hf://` or `http(s)://`; `oci://` goes to the modelcar branch of the pod mutator and
+    `pvc://` is mounted straight into `kserve-container`, and neither looks a storage
+    container up. With none in the cluster KServe falls back to the ConfigMap key, whose
+    image is qualified but not embedded, so a downloading URI fails at the pull — where it
+    would fail anyway with no network. An object store on the node or the air-gapped network
+    (a MinIO) is what would bring it back.
     `controller.yaml` adds resources to both containers; upstream's manager is 100m/200Mi →
     100m/300Mi, which breaks both ratios, and `kube-rbac-proxy` has none. `namespace.yaml`
     creates `kserve` (upstream ships none) with upstream's `control-plane` label — the pod
@@ -420,14 +427,16 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   without the patches most of these pods are BestEffort and first in line for eviction.
   The images embedded are **derived from the render**, not listed beside it: the build runs
   `manifest-images.sh` over the roots and embeds what it prints, so the version ARGs are the
-  only pin. `SERVICE_IMAGES` remains for an image no manifest names. Eight today: cert-manager
+  only pin. `SERVICE_IMAGES` remains for an image no manifest names. Seven today: cert-manager
   ×3 (`quay.io/jetstack/...`), one for External Secrets
   (`oci.external-secrets.io/external-secrets/external-secrets`, shared by all three of its
-  Deployments), `docker.io/kserve/kserve-controller` and `storage-initializer`,
-  `quay.io/brancz/kube-rbac-proxy` and `nvcr.io/nvidia/tritonserver:25.02-py3-igpu` — the
+  Deployments), `docker.io/kserve/kserve-controller`, `quay.io/brancz/kube-rbac-proxy` and `nvcr.io/nvidia/tritonserver:25.02-py3-igpu` — the
   largest thing in the pipeline. A model given as `storageUri: oci://…` is named in no
   `image:` field, so the scan does not see it: it goes in `SERVICE_IMAGES` until the scan
-  learns to read `storageUri`.
+  learns to read `storageUri`. The same goes for every image named only inside `inferenceservice-config`'s
+  JSON — the agent, the router, the explainers, the storage initializer: none is embedded,
+  and none is used today. Turning on request logging or batching means adding the agent image
+  to `SERVICE_IMAGES`.
   The smoke test renders every root with `oc kustomize` — MicroShift will render the same roots
   at start-up, and a root that does not render is a component that is silently never applied —
   then checks: the workload set each root may contain (kustomize already fails the build on a
@@ -446,8 +455,10 @@ was provisioned from the bundle and the devkit was flashed with the QSPI command
   or the pod — and that `kserve` carries the enforce label, that every container has requests
   and limits **and that the ratios hold** (checked by arithmetic over the render rather than
   by grepping the numbers, so an edit cannot quietly break one; serving runtimes included),
-  that every image is registry-qualified and embedded, and that the three spellings of the
-  KServe release (controller, `ClusterStorageContainer`, ConfigMap) share one tag. The
+  that every image is registry-qualified and embedded, that the render carries no
+  `ClusterStorageContainer` (a delete that stops matching already fails the build; this is
+  for one upstream adds under another name), and that the two spellings of the KServe
+  release (controller, ConfigMap) share one tag. The
   admission check reads the render, so the pods KServe builds at run time are outside it:
   whether a predictor pod is admitted, and whether its SCC-assigned UID can open the GPU, is
   only answered on hardware. It prints `du -sh` of the cache:

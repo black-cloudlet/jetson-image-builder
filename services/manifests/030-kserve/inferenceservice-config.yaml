@@ -36,7 +36,10 @@ data:
         "disableHTTPRouteTimeout": false
     }
   # Three changes.
-  #   - image fully qualified, as in storage-container.yaml.
+  #   - image fully qualified. It is not embedded: the ClusterStorageContainer
+  #     is deleted (see its file) and nothing here downloads a model, so this
+  #     only decides that a downloading URI fails at the pull of a named image
+  #     rather than walking CRI-O's search registries first.
   #   - resources at memory 1:1, CPU 1:4 (upstream: 100Mi -> 1Gi, 100m -> 1).
   #   - no uidModelcar. For an oci:// model the pod mutator sets runAsUser to
   #     this value on the modelcar sidecar and on kserve-container both

@@ -7,6 +7,7 @@
 # workloads are separate binaries for features nothing here creates. Their
 # CRDs, Services and webhook configurations stay: those webhooks match only
 # their own kinds, so with no backend they refuse only what is not installed.
+# The ClusterStorageContainer goes too; see its file.
 #
 # One patch per file and one resource per patch, for the reason given in
 # 010-cert-manager's kustomization.
@@ -23,8 +24,8 @@ images:
     newName: docker.io/kserve/kserve-controller
 patches:
   - path: inferenceservice-config.yaml
-  - path: storage-container.yaml
   - path: controller.yaml
   - path: delete-llmisvc-controller.yaml
   - path: delete-localmodel-controller.yaml
   - path: delete-localmodelnode-agent.yaml
+  - path: delete-storage-container.yaml

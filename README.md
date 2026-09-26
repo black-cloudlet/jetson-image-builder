@@ -109,7 +109,7 @@ the next one needs it sorts itself out.
 |---|---|
 | `010-cert-manager` | upstream's static manifest, pinned by `CERT_MANAGER_VER`. Three Deployments, no Helm and no `startupapicheck` Job. Patched only for resources |
 | `020-external-secrets` | upstream's static manifest, pinned by `EXTERNAL_SECRETS_VER`. Three Deployments, patched for resources, to drop the UID upstream pins, and into namespace `external-secrets` |
-| `030-kserve` | upstream's `kserve.yaml`, pinned by `KSERVE_VER` (v0.20.0). Standard (raw) deployment mode, no Ingress creation, no `uidModelcar`, registry-qualified images, and one workload of upstream's four. Namespace `kserve`, with Pod Security enforced at `restricted` |
+| `030-kserve` | upstream's `kserve.yaml`, pinned by `KSERVE_VER` (v0.20.0). Standard (raw) deployment mode, no Ingress creation, no `uidModelcar`, registry-qualified images, one workload of upstream's four, and no `ClusterStorageContainer` — models arrive as `oci://` or `pvc://`, neither of which downloads, so the storage initializer's image is not embedded. Namespace `kserve`, with Pod Security enforced at `restricted` |
 | `040-triton-runtime` | one `ClusterServingRuntime`, `triton-igpu`: NVIDIA Triton's `-py3-igpu` build for Tegra, one `nvidia.com/gpu` (one of the four time slices), TensorRT and ONNX |
 
 The upstream installs are `curl`'d at build time, not vendored, and patched from the roots —
