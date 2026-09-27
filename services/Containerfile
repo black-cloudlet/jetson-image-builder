@@ -19,8 +19,7 @@ RUN curl -fsSL \
       -o /etc/microshift/manifests.d/020-external-secrets/external-secrets.yaml \
       "https://github.com/external-secrets/external-secrets/releases/download/${EXTERNAL_SECRETS_VER}/external-secrets.yaml"
 
-# kserve.yaml only: kserve-cluster-resources.yaml carries fourteen serving
-# runtimes, every image of which would be embedded. 040-triton-runtime is ours.
+# Not kserve-cluster-resources.yaml: its fourteen runtimes' images would all be embedded.
 ARG KSERVE_VER=v0.20.0
 RUN curl -fsSL -o /etc/microshift/manifests.d/030-kserve/kserve.yaml \
       "https://github.com/kserve/kserve/releases/download/${KSERVE_VER}/kserve.yaml"

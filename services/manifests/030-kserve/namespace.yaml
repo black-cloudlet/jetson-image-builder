@@ -1,10 +1,5 @@
-# kserve.yaml ships no namespace, and everything namespaced in it is in this one.
-#
-# control-plane is upstream's label, kept for upstream's reason: the pod mutator
-# skips namespaces that carry it, so KServe's own controller is never sent
-# through a webhook it serves itself. The same skip means an InferenceService
-# created here would get no model injected; they belong in a namespace of their
-# own. Admission is left to MicroShift's SCC, as for every other root.
+# kserve.yaml ships no namespace. The pod mutator skips namespaces with the
+# control-plane label, so InferenceServices must not be created here.
 apiVersion: v1
 kind: Namespace
 metadata:

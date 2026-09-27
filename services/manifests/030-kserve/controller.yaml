@@ -1,9 +1,5 @@
-# Resources for the reason given in 010-cert-manager/resources-controller.yaml:
-# memory 1:1, CPU 1:4. Upstream sets 100m/200Mi -> 100m/300Mi on the manager,
-# which breaks both ratios, and nothing at all on kube-rbac-proxy.
-#
-# The security context needs no change: both containers already run non-root,
-# drop every capability, forbid privilege escalation and pin no UID.
+# Resources, memory 1:1 and CPU 1:4. Upstream breaks both ratios on the
+# manager and sets none on kube-rbac-proxy.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -1,24 +1,13 @@
-# kserve.yaml is not in git: the Containerfile curls it in, pinned by
-# KSERVE_VER. Patched from here, never forked — it is 7 MB, most of it CRDs.
-#
-# Only kserve-controller-manager runs. It serves every webhook this node uses
-# (InferenceService defaulting and validation, the ClusterServingRuntime
-# validator, the pod mutator that injects the model), and the three deleted
-# workloads are separate binaries for features nothing here creates. Their
-# CRDs, Services and webhook configurations stay: those webhooks match only
-# their own kinds, so with no backend they refuse only what is not installed.
-# The ClusterStorageContainer goes too; see its file.
-#
-# One patch per file and one resource per patch, for the reason given in
-# 010-cert-manager's kustomization.
+# kserve.yaml is curl'd by the Containerfile (KSERVE_VER) and patched here.
+# Only kserve-controller-manager runs; the deletes remove workloads and objects
+# nothing here uses, and keep their images out of the cache.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - namespace.yaml
   - kserve.yaml
-# newName without newTag keeps the tag the release pinned. An entry that stops
-# matching is a silent no-op, unlike the patches, so the smoke test rejects a
-# render that still names an unqualified image.
+# Keeps the release's tag. A non-matching entry is a silent no-op; the smoke
+# test catches an unqualified image.
 images:
   - name: kserve/kserve-controller
     newName: docker.io/kserve/kserve-controller

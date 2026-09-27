@@ -34,10 +34,8 @@ for root in "${roots[@]}"; do
 done
 
 # Prefixed to the jq programs below: every object in a render that makes pods,
-# and the pod spec inside it, wherever its kind keeps one. A serving runtime is
-# not a workload, but KServe builds every predictor pod from its containers, so
-# `pods` counts it too — with a spec that has containers and no pod-level
-# fields, which is all a ServingRuntime can carry.
+# and the pod spec inside it, wherever its kind keeps one. `pods` adds serving
+# runtimes, whose containers become every predictor pod.
 W='def workloads:
 	.[] | select(.kind | test("^(Deployment|DaemonSet|StatefulSet|Job|CronJob|Pod)$"));
 def podspec:
@@ -51,9 +49,8 @@ def pods: (workloads | {o: "\(.kind)/\(.metadata.name)", s: podspec}),
 echo "== workloads =="
 # kustomize fails the build on a patch that matches nothing, so a rename
 # upstream cannot slip through silently — but a workload upstream *adds* can,
-# and it would arrive with no resources and possibly with a pinned UID. Name
-# the set each root may contain; anything else has to be looked at before it
-# ships. KServe v0.21.0 adds a DaemonSet with no nodeSelector, for one.
+# and it would arrive with no resources and possibly a pinned UID. Name the set
+# each root may contain; anything else has to be looked at before it ships.
 expect_workloads() {
 	name=$1 want=$2
 	got=$(jq -r "$W"' workloads | "\(.kind)/\(.metadata.name)"' "$render/$name.json" | sort)
@@ -131,9 +128,8 @@ echo "   runAsNonRoot: true on every container"
 
 echo "== kserve configuration =="
 ksv=$render/030-kserve.json
-# inferenceservice-config holds one JSON string per key; fromjson reads them.
-# Per key, not by grepping the ConfigMap: upstream's _example key mentions
-# every setting in comments.
+# One JSON string per key. Read per key: upstream's _example key mentions every
+# setting in comments.
 isvc_config() {
 	jq -er --arg k "$1" '.[] | select(.kind == "ConfigMap"
 		and .metadata.name == "inferenceservice-config") | .data[$k] | fromjson' "$ksv"
@@ -148,35 +144,24 @@ expect_config deploy '.defaultDeploymentMode == "Standard"' \
 	"anything else needs Knative and Istio, neither of which is installed"
 expect_config ingress '.disableIngressCreation == true' \
 	"an Ingress per InferenceService would name a host nothing here resolves"
-# Upstream sets 1010, and the pod mutator puts it on the model sidecar and on
-# kserve-container both: restricted-v2 refuses every oci:// model pod.
 expect_config storageInitializer 'has("uidModelcar") | not' \
 	"restricted-v2 refuses every pod a pinned uidModelcar lands on"
-# The storage initializer is named only in this JSON string, which the image
-# scan below cannot see and nothing embeds; its tag is checked there.
+# Named only in this JSON string, which the image scan cannot see.
 si_image=$(isvc_config storageInitializer | jq -r .image)
 [[ $si_image == docker.io/kserve/storage-initializer:* ]] \
 	|| fail "storageInitializer image is $si_image," \
 		"want docker.io/kserve/storage-initializer:<tag>"
 echo "   storageInitializer image: $si_image"
-# Deleted, and a delete that stops matching fails the build; this is for one
-# upstream adds under another name, whose image the build would then embed for
-# downloads that never happen.
+# For one upstream adds under another name; a renamed one fails the delete.
 csc=$(jq -r '.[] | select(.kind == "ClusterStorageContainer") | .metadata.name' "$ksv")
 [[ -z $csc ]] || fail "the kserve render carries a ClusterStorageContainer:" $csc
 echo "   no ClusterStorageContainer"
 
 echo "== restricted-v2 =="
-# What MicroShift's SCC requires of every pod template, and of every serving
-# runtime container, which becomes one: no pinned UID, GID or fsGroup, no host
-# namespaces or hostPath, nothing privileged, capabilities dropped to ALL, and
-# allowPrivilegeEscalation false, runAsNonRoot and seccomp RuntimeDefault on
-# the container or the pod. Spelled out rather than left for the SCC to
-# default, so a patch that stops applying or a field upstream adds fails the
-# build instead of a pod on the node. The pods KServe builds at run time are in
-# no render; the uidModelcar check above is the one field of theirs this node
-# controls. The pod-level fallback tests for null, not with //, for the reason
-# given at runAsNonRoot above.
+# Every pod template and serving runtime container, checked for what the SCC
+# requires rather than left for it to default, so a broken patch fails the
+# build instead of a pod. Pods KServe builds at run time are in no render.
+# The pod fallback tests for null, not //, as for runAsNonRoot above.
 for root in "${roots[@]}"; do
 	name=$(basename "$root")
 	out=$(jq -r "$W"'
@@ -232,8 +217,7 @@ for root in "${roots[@]}"; do
 		elif ($r.limits.cpu | cpu) != 4 * ($r.requests.cpu | cpu) then
 			"cpu \($r.requests.cpu) -> \($r.limits.cpu), want limit == 4x request"
 		else "ok" end' "$render/$name.json")
-	# A root of plain objects, a SecretStore say, has nothing to size. A
-	# serving runtime does: its container is the predictor.
+	# A root of plain objects, a SecretStore say, has nothing to size.
 	if [[ -z $out ]]; then
 		echo "   $name: no workloads"
 		continue
@@ -271,9 +255,8 @@ while read -r img; do
 	echo "   embedded: $img"
 done <<< "$images"
 
-# The controller and the storage initializer in inferenceservice-config are
-# two spellings of one release; the second is patched by hand and does not
-# move with KSERVE_VER.
+# The ConfigMap's storage initializer is patched by hand and does not move
+# with KSERVE_VER.
 kserve_tags=$(printf '%s\n%s\n' "$images" "$si_image" |
 	sed -n 's|^docker\.io/kserve/[^:]*:\(.*\)$|\1|p' | sort -u)
 [[ $(wc -l <<< "$kserve_tags") -eq 1 ]] \
@@ -296,7 +279,7 @@ done < "$cache/mapping.txt"
 # Printed, not asserted: the cache is copied into containers-storage at first
 # boot, so every embedded image is paid for twice on a 40 GiB root. The number
 # belongs in the log — it is the first thing to look at when a build stops
-# fitting, and Triton's igpu image is the largest thing in it.
+# fitting.
 echo "embedded: $(wc -l < "$cache/mapping.txt") images"
 du -sh "$cache"
 

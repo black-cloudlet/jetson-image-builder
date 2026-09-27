@@ -1,6 +1,4 @@
-# LocalModelCache, which pre-downloads models onto nodes. Off in
-# inferenceservice-config (localModel.enabled: false), and here the model is
-# inside the OS image, so there is nothing to download.
+# Local model cache: off upstream, and models here arrive inside the image.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
