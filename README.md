@@ -414,6 +414,9 @@ reboots ejecting the media.
    logo → Boot Maintenance Manager → Boot Options).
 2. **Boot the ISO.** `dd` it to a USB key, press ESC at the NVIDIA logo, pick USB. Remove any SD
    card first, so the eMMC can only be `mmcblk0`. The installer menu starts on its own after 5 s.
+   No network cable is needed: the image is inside the ISO. If the screen stops on the systemd
+   boot log, Ctrl-Alt-F2 gives a shell: `systemctl list-jobs` shows what is waiting and
+   `/tmp/anaconda.log` what the installer is doing.
 3. **First login** over serial (`ttyTCU0`) or `ssh cloudlet@192.168.1.10`:
    ```
    bootc status

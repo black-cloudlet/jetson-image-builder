@@ -251,7 +251,10 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `ostreecontainer`; `[customizations.user]`/`filesystem` cannot be combined with it):
   `text --non-interactive`, `timezone Asia/Jerusalem --utc`, static `192.168.1.10/24` gw
   `192.168.1.254` on `eth0`, `--nameserver=192.168.1.1` (must answer, or every lookup waits out
-  the glibc timeout), `--domain=cloudlet.local`, `--hostname=jetson-1`,
+  the glibc timeout), `--no-activate` (anaconda otherwise brings up the first `network` device
+  and waits for it; the install reads only the ISO, so no cable is needed),
+  `--ipv4-dns-search=cloudlet.local` (there is no `--domain`; an unknown option fails the parse
+  and stops the installer before its UI), `--hostname=jetson-1`,
   `ignoredisk --only-use=mmcblk0`, `clearpart --all`, `reqpart --add-boot`, VG `rhel` with a
   40 GiB xfs root, **no swap**, and **~16.5 GiB left free for LVMS** (fill the VG and the
   cluster has no dynamic PVs). Root locked; user `cloudlet` in `wheel` from
@@ -371,6 +374,8 @@ whether `stable` moves on every green build or only after a hardware boot; wheth
   test proves nothing about the GPU; boot hardware before promoting a tag.
 - `nvidia-ctk runtime configure --config=…/99-nvidia.conf` writes `99-nvidia.toml` and exits 0.
   CRI-O reads either; only a check spelling the name notices. Ask for `.toml`.
+- Validate the kickstart before building an ISO: `ksvalidator -v RHEL9` (pip `pykickstart`) on
+  the rendered `contents`. A bad option stops anaconda at the systemd log, with no visible error.
 - A bare `test` exits 1 silently. Every check names what it looked for and lists the directory.
 - podman in a `container:` job silently loses the native overlay diff (overlayfs storage, or
   `metacopy=on`). Keep the `/scratch` bind, the `metacopy` strip and the check.
