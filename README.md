@@ -368,8 +368,10 @@ Every layer is published under these tags, all naming the same manifest:
    first rejects an empty value, a line break, a password that is not a `$6$…` crypt hash, and
    a key that is not an OpenSSH public key. Each of those would otherwise produce an ISO nobody
    can log into.
-3. Run `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso` on the `services` image.
-4. Upload `jetson-orin-bootc-microshift-<tag>.iso` and `SHA256SUMS` as the artifact
+3. Run RHEL's `ksvalidator -v RHEL9` on the rendered kickstart. bib does not parse it, and an
+   option anaconda rejects would stop the installer on the device with no visible error.
+4. Run `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso` on the `services` image.
+5. Upload `jetson-orin-bootc-microshift-<tag>.iso` and `SHA256SUMS` as the artifact
    `jetson-orin-bootc-microshift-iso-<tag>`, kept for **7 days**.
 
 The installer boots the stock RHEL kernel, not the Tegra one. The eMMC appears as `mmcblk0` only

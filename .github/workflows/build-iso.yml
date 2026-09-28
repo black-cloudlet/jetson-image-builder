@@ -122,6 +122,20 @@ jobs:
             exit 1
           fi
 
+      # A kickstart that fails to parse is not caught by bib: the ISO builds, and
+      # anaconda stops at the end of the systemd boot log with no visible error.
+      # RHEL's pykickstart is from the same repos bib depsolves Anaconda from, so it
+      # knows the options the installer will. python3.12 only for tomllib, which
+      # applies TOML's string rules to `contents` exactly as bib does.
+      - name: Validate the kickstart
+        run: |
+          dnf -y install pykickstart python3.12
+          install -m 600 /dev/null /tmp/ks.cfg
+          python3.12 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["customizations"]["installer"]["kickstart"]["contents"])' \
+            /tmp/config.toml > /tmp/ks.cfg
+          ksvalidator -v RHEL9 /tmp/ks.cfg \
+            || { echo "::error::the kickstart in ${{ inputs.config }} does not parse; anaconda would stop before its UI"; exit 1; }
+
       - name: Build ISO
         run: |
           mkdir -p output

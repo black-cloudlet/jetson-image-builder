@@ -289,7 +289,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `bootc-fetch-apply-updates.timer`: it fails every day the registry is unreachable.
 - `.github/workflows/build-iso.yml` — **reusable**: register, substitute the `@JETSON_*@`
   placeholders in bash with secrets in `env:` (a `&`, quote or newline would break `sed`),
-  reject an empty or non-crypt password hash, run
+  reject an empty or non-crypt password hash, validate the rendered kickstart with RHEL's
+  `ksvalidator -v RHEL9` (bib does not, and a parse failure only shows on hardware), run
   `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso`, upload `*.iso` +
   `SHA256SUMS`.
 - `.github/workflows/build-microshift.yml` — the only caller, on push to `main` under
@@ -374,8 +375,9 @@ whether `stable` moves on every green build or only after a hardware boot; wheth
   test proves nothing about the GPU; boot hardware before promoting a tag.
 - `nvidia-ctk runtime configure --config=…/99-nvidia.conf` writes `99-nvidia.toml` and exits 0.
   CRI-O reads either; only a check spelling the name notices. Ask for `.toml`.
-- Validate the kickstart before building an ISO: `ksvalidator -v RHEL9` (pip `pykickstart`) on
-  the rendered `contents`. A bad option stops anaconda at the systemd log, with no visible error.
+- A kickstart option anaconda does not know (`--domain` was one) stops the installer at the
+  systemd log with no visible error, and bib builds the ISO anyway. `build-iso.yml` runs
+  `ksvalidator -v RHEL9` on the rendered `contents`; locally, pip `pykickstart` does the same.
 - A bare `test` exits 1 silently. Every check names what it looked for and lists the directory.
 - podman in a `container:` job silently loses the native overlay diff (overlayfs storage, or
   `metacopy=on`). Keep the `/scratch` bind, the `metacopy` strip and the check.
