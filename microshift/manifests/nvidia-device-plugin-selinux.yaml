@@ -1,0 +1,14 @@
+# Runs the plugin container as SELinux type spc_t.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin-daemonset
+  namespace: kube-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: nvidia-device-plugin-ctr
+          securityContext:
+            seLinuxOptions:
+              type: spc_t
