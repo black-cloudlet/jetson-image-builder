@@ -288,10 +288,11 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   placeholders in bash with secrets in `env:` (a `&`, quote or newline would break `sed`),
   reject an empty or non-crypt password hash, run
   `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso`, then rewrite the ISO's
-  GRUB menu timeout from 60 s to 5 s (`GRUB_TIMEOUT`) with `xorriso`/`mtools`: in
-  `/EFI/BOOT/grub.cfg` and in the copy inside `images/efiboot.img`, which is the one UEFI
-  GRUB reads. `-boot_image any replay` keeps the El Torito entry and volume ID (both checked);
-  `implantisomd5` restores the media-check checksum. Upload `*.iso` + `SHA256SUMS`.
+  GRUB menu timeout from 60 s to 5 s with `xorriso`/`mtools`: in `/EFI/BOOT/grub.cfg` and in
+  the copy inside `images/efiboot.img`, which is the one UEFI GRUB reads
+  (`-boot_image any replay` keeps the El Torito entry and volume ID). The rewrite drops the
+  implanted md5, so "Test this media" cannot verify the stick; unused, not restored. Upload
+  the `*.iso` alone (no checksum file), uncompressed: it is gzip'd layers and squashfs already.
 - `.github/workflows/build-microshift.yml` — the only caller, on push to `main` under
   `base/**`, `microshift/**`, `services/**` or the workflows, and on `workflow_dispatch`.
   **Nothing runs on a pull request.**
