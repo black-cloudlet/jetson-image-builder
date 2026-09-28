@@ -177,6 +177,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   - A second patch sets the container's `seLinuxOptions.type: spc_t`. As `container_t`,
     SELinux denies the connect to `kubelet.sock` and the plugin loops on `Could not register
     device plugin: context deadline exceeded` (seen on hardware). Capabilities stay dropped.
+    No SCC: OpenShift's apiserver skips SCC admission in `kube-system` (run-level 0 by name),
+    which is also why upstream's hostPath is admitted. Moving the plugin out needs one.
   - The smoke test checks how the render is **wired** (one container, `CONFIG_FILE` into a
     mounted ConfigMap with a replica count, `/var/lib/kubelet/device-plugins` mounted), never
     upstream field names: those change between tags and broke an earlier version of the check.

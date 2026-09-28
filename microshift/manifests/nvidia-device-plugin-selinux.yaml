@@ -1,9 +1,4 @@
-# The plugin registers by dialling kubelet.sock, which MicroShift's kubelet
-# owns. As container_t, SELinux denies the connect; the gRPC dial retries until
-# its 5 s deadline, so it logs "Could not register device plugin: context
-# deadline exceeded" and loops every 30 s. spc_t lifts only the SELinux
-# confinement: upstream's dropped capabilities and no-privilege-escalation
-# stay, merged in by key.
+# Runs the plugin container as SELinux type spc_t.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
