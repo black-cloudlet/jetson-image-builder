@@ -256,7 +256,7 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   40 GiB xfs root, **no swap**, and **~16.5 GiB left free for LVMS** (fill the VG and the
   cluster has no dynamic PVs). Root locked; user `cloudlet` in `wheel` from
   `@JETSON_SSH_PUBKEY@`/`@JETSON_PASSWORD_HASH@`; `reboot --eject`. ISO label
-  `JETSON_ORIN_BOOTC`, GRUB menu 5 s. Address and hostname are baked in, so two devices from
+  `JETSON_ORIN_BOOTC`. Address and hostname are baked in, so two devices from
   one ISO collide. A `%post` writes `10.44.0.1 jetson-1.cloudlet.local jetson-1` into
   `/etc/hosts` and `/etc/microshift/config.d/20-subject-alt-names.yaml` with
   `jetson-1.cloudlet.local` as the only extra SAN. The laptop reaches 6443 by name (needs an A
@@ -287,8 +287,11 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
 - `.github/workflows/build-iso.yml` — **reusable**: register, substitute the `@JETSON_*@`
   placeholders in bash with secrets in `env:` (a `&`, quote or newline would break `sed`),
   reject an empty or non-crypt password hash, run
-  `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso`, upload `*.iso` +
-  `SHA256SUMS`.
+  `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso`, then rewrite the ISO's
+  GRUB menu timeout from 60 s to 5 s (`GRUB_TIMEOUT`) with `xorriso`/`mtools`: in
+  `/EFI/BOOT/grub.cfg` and in the copy inside `images/efiboot.img`, which is the one UEFI
+  GRUB reads. `-boot_image any replay` keeps the El Torito entry and volume ID (both checked);
+  `implantisomd5` restores the media-check checksum. Upload `*.iso` + `SHA256SUMS`.
 - `.github/workflows/build-microshift.yml` — the only caller, on push to `main` under
   `base/**`, `microshift/**`, `services/**` or the workflows, and on `workflow_dispatch`.
   **Nothing runs on a pull request.**
@@ -362,6 +365,9 @@ whether `stable` moves on every green build or only after a hardware boot; wheth
 
 **Things that bit us — do not repeat.**
 
+- bib's `[customizations.installer.bootloader.grub2] menu-timeout` parses but does nothing for
+  `anaconda-iso`: osbuild/images honours it for bootc ISOs only from v80, and bib vendors
+  v0.251. The GRUB menu sat at 60 s on hardware. A bib key is proven only by the built ISO.
 - RHEL ships the C preprocessor as `cpp`; `flash.sh` dies with `FileNotFoundError: cpp`
   without it.
 - `apt-get --download-only install` skips installed packages; a Debian bundle needs a clean

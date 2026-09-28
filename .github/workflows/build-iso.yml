@@ -133,7 +133,57 @@ jobs:
             -v /var/lib/containers/storage:/var/lib/containers/storage \
             registry.redhat.io/rhel9/bootc-image-builder:latest \
             --type anaconda-iso --config /config.toml "${{ inputs.image-ref }}"
-          mv output/bootiso/install.iso "output/$ISO_NAME"
+
+      # osbuild writes `set timeout=60` into the ISO's grub.cfg. bib parses
+      # [customizations.installer.bootloader.grub2] menu-timeout but drops it for
+      # anaconda-iso: osbuild/images wired it up for bootc ISOs only in v80, and
+      # bib vendors v0.251. So rewrite the ISO. UEFI GRUB reads the grub.cfg inside
+      # the El Torito image (images/efiboot.img); the copy on the ISO9660 is
+      # patched too so the two agree. Rewriting drops the checksum behind "Test
+      # this media", so it is implanted again.
+      - name: Set the installer's GRUB menu timeout
+        shell: bash
+        env:
+          GRUB_TIMEOUT: 5
+        run: |
+          set -euo pipefail
+          dnf -y install xorriso mtools isomd5sum
+          src=output/bootiso/install.iso dst="output/$ISO_NAME"
+          work=$(mktemp -d /var/tmp/grub.XXXXXX)
+          xorriso -osirrox on -indev "$src" \
+            -extract /EFI/BOOT/grub.cfg "$work/grub.cfg" \
+            -extract /images/efiboot.img "$work/efiboot.img"
+          chmod u+w "$work/grub.cfg" "$work/efiboot.img"
+          mcopy -i "$work/efiboot.img" ::/EFI/BOOT/grub.cfg "$work/esp.cfg"
+          cmp -s "$work/grub.cfg" "$work/esp.cfg" \
+            || { echo "::error::/EFI/BOOT/grub.cfg differs between the ISO and images/efiboot.img; not patching one of two configs"; diff "$work/grub.cfg" "$work/esp.cfg" || true; exit 1; }
+          [ "$(grep -c '^set timeout=60$' "$work/grub.cfg")" = 1 ] \
+            || { echo "::error::expected exactly one 'set timeout=60' line in the ISO's grub.cfg"; cat "$work/grub.cfg"; exit 1; }
+          sed -i "s/^set timeout=60\$/set timeout=$GRUB_TIMEOUT/" "$work/grub.cfg"
+          mcopy -o -i "$work/efiboot.img" "$work/grub.cfg" ::/EFI/BOOT/grub.cfg
+
+          # replay keeps the El Torito EFI entry and the volume ID of the input.
+          xorriso -indev "$src" -outdev "$dst" -boot_image any replay \
+            -map "$work/grub.cfg" /EFI/BOOT/grub.cfg \
+            -map "$work/efiboot.img" /images/efiboot.img
+          implantisomd5 --force "$dst"
+
+          volid() { xorriso -indev "$1" -pvd_info 2>/dev/null | sed -n 's/^Volume Id *: *//p'; }
+          [ "$(volid "$dst")" = "$(volid "$src")" ] \
+            || { echo "::error::volume ID changed from '$(volid "$src")' to '$(volid "$dst")'; anaconda finds stage2 by it"; exit 1; }
+          eltorito=$(xorriso -indev "$dst" -report_el_torito plain 2>/dev/null)
+          grep -q 'img path.*/images/efiboot\.img' <<<"$eltorito" \
+            || { echo "::error::rewritten ISO has no El Torito boot entry for /images/efiboot.img"; echo "$eltorito"; exit 1; }
+          rm -r "$work" && mkdir "$work"
+          xorriso -osirrox on -indev "$dst" \
+            -extract /EFI/BOOT/grub.cfg "$work/iso.cfg" \
+            -extract /images/efiboot.img "$work/efiboot.img"
+          mcopy -i "$work/efiboot.img" ::/EFI/BOOT/grub.cfg "$work/esp.cfg"
+          for cfg in iso esp; do
+            grep -qx "set timeout=$GRUB_TIMEOUT" "$work/$cfg.cfg" \
+              || { echo "::error::no 'set timeout=$GRUB_TIMEOUT' in the rewritten ISO's grub.cfg ($cfg copy)"; exit 1; }
+          done
+          rm -r "$work" output/bootiso
           (cd output && sha256sum ./*.iso > SHA256SUMS)
 
       - uses: actions/upload-artifact@v4
