@@ -153,13 +153,14 @@ jobs:
             -map grub.cfg /EFI/BOOT/grub.cfg -map efiboot.img /images/efiboot.img
           rm -r grub.cfg efiboot.img bootiso
 
-      # No compression: the ISO is gzip'd image layers and squashfs already.
+      # Maximum zip compression. The ISO is mostly gzip'd layers and squashfs, so
+      # expect a small saving for several extra minutes of upload time.
       - uses: actions/upload-artifact@v4
         with:
           name: jetson-orin-bootc-${{ inputs.name }}-iso-${{ inputs.tag }}
           path: output/*.iso
           retention-days: 7
-          compression-level: 0
+          compression-level: 9
 
       - name: Unregister
         if: always()

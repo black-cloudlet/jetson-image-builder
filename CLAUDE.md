@@ -292,7 +292,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   the copy inside `images/efiboot.img`, which is the one UEFI GRUB reads
   (`-boot_image any replay` keeps the El Torito entry and volume ID). The rewrite drops the
   implanted md5, so "Test this media" cannot verify the stick; unused, not restored. Upload
-  the `*.iso` alone (no checksum file), uncompressed: it is gzip'd layers and squashfs already.
+  the `*.iso` alone (no checksum file) at zip `compression-level: 9`, the maintainer's call; it is
+  mostly gzip'd layers and squashfs, so the saving is small and the upload slower.
 - `.github/workflows/build-microshift.yml` — the only caller, on push to `main` under
   `base/**`, `microshift/**`, `services/**` or the workflows, and on `workflow_dispatch`.
   **Nothing runs on a pull request.**
