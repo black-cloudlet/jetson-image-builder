@@ -169,7 +169,8 @@ The file name and the image name differ: `Containerfile.podman` builds the image
   (v0.20.0) is patched from `microshift/manifests/` for **GPU time slicing**: the Orin has one
   integrated GPU, so the plugin advertises it as **4** `nvidia.com/gpu` so four pods can share
   it. There is no memory isolation between them, so 4 is a claim about what fits in the
-  module's RAM.
+  module's RAM. A second patch runs the plugin as SELinux type `spc_t`: as `container_t` it
+  cannot connect to kubelet's registration socket and logs `context deadline exceeded`.
 - **Every image MicroShift and the plugin run**, embedded: the control-plane list from
   `microshift-release-info`, plus whatever the manifests name, found by rendering them with
   `microshift/manifest-images.sh`.

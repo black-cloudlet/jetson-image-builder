@@ -174,6 +174,11 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     `nvidia-device-plugin.yml` is curl'd. One iGPU means one GPU pod without slicing. No memory
     isolation between replicas, so the count is a claim about the SOM's RAM; 1 disables it.
     `renameByDefault` stays off, so the resource is plain `nvidia.com/gpu`.
+  - A second patch sets the container's `seLinuxOptions.type: spc_t`. As `container_t`,
+    SELinux denies the connect to `kubelet.sock` and the plugin loops on `Could not register
+    device plugin: context deadline exceeded` (seen on hardware). Capabilities stay dropped.
+    No SCC: OpenShift's apiserver skips SCC admission in `kube-system` (run-level 0 by name),
+    which is also why upstream's hostPath is admitted. Moving the plugin out needs one.
   - The smoke test checks how the render is **wired** (one container, `CONFIG_FILE` into a
     mounted ConfigMap with a replica count, `/var/lib/kubelet/device-plugins` mounted), never
     upstream field names: those change between tags and broke an earlier version of the check.
@@ -205,7 +210,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   - `030-kserve/` — upstream `kserve.yaml` (`KSERVE_VER`, v0.20.0; v0.21.0 had no release
     assets and adds a DaemonSet with no nodeSelector). `kserve-cluster-resources.yaml` is not
     fetched: fourteen runtimes' images would be embedded. Only `kserve-controller-manager`
-    runs. Deleted, which also keeps their images out: `llmisvc-controller-manager` (LLM
+    runs; its manager is patched to `imagePullPolicy: IfNotPresent` (upstream says `Always`,
+    which was ErrImagePull on hardware with the image embedded). Deleted, which also keeps their images out: `llmisvc-controller-manager` (LLM
     serving, pins `runAsUser: 1000`), both local-model-cache workloads (off; the agent mounts a
     hostPath), and the `ClusterStorageContainer` (only downloading URIs use it). Their CRDs and
     webhooks stay; each matches only its own kinds.
@@ -233,8 +239,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   **Smoke test**: renders every root with `oc kustomize` and checks the workload set per root;
   External Secrets without `runAsUser`, with `runAsNonRoot`, in its own namespace and naming
   `default` nowhere outside its CRDs; `inferenceservice-config` values; every pod template and
-  serving-runtime container admissible under restricted-v2; requests, limits and ratios; every
-  image qualified and embedded; no `ClusterStorageContainer`; one KServe tag. It prints
+  serving-runtime container admissible under restricted-v2; requests, limits and ratios; no
+  container whose pull policy is, or defaults to, `Always`; every image qualified and embedded; no `ClusterStorageContainer`; one KServe tag. It prints
   `du -sh` of the cache, which the eMMC pays for twice (`/usr` and containers-storage). Pods
   KServe builds at run time are in no render: their admission and GPU access are hardware
   questions.
@@ -259,7 +265,7 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   40 GiB xfs root, **no swap**, and **~16.5 GiB left free for LVMS** (fill the VG and the
   cluster has no dynamic PVs). Root locked; user `cloudlet` in `wheel` from
   `@JETSON_SSH_PUBKEY@`/`@JETSON_PASSWORD_HASH@`; `reboot --eject`. ISO label
-  `JETSON_ORIN_BOOTC`, GRUB menu 5 s. Address and hostname are baked in, so two devices from
+  `JETSON_ORIN_BOOTC`. Address and hostname are baked in, so two devices from
   one ISO collide. A `%post` writes `10.44.0.1 jetson-1.cloudlet.local jetson-1` into
   `/etc/hosts` and `/etc/microshift/config.d/20-subject-alt-names.yaml` with
   `jetson-1.cloudlet.local` as the only extra SAN. The laptop reaches 6443 by name (needs an A
@@ -291,8 +297,13 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   placeholders in bash with secrets in `env:` (a `&`, quote or newline would break `sed`),
   reject an empty or non-crypt password hash, validate the rendered kickstart with RHEL's
   `ksvalidator -v RHEL9` (bib does not, and a parse failure only shows on hardware), run
-  `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso`, upload `*.iso` +
-  `SHA256SUMS`.
+  `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso`, then rewrite the ISO's
+  GRUB menu timeout from 60 s to 5 s with `xorriso`/`mtools`: in `/EFI/BOOT/grub.cfg` and in
+  the copy inside `images/efiboot.img`, which is the one UEFI GRUB reads
+  (`-boot_image any replay` keeps the El Torito entry and volume ID). The rewrite drops the
+  implanted md5, so "Test this media" cannot verify the stick; unused, not restored. Upload
+  the `*.iso` alone (no checksum file) at zip `compression-level: 9`, the maintainer's call; it is
+  mostly gzip'd layers and squashfs, so the saving is small and the upload slower.
 - `.github/workflows/build-microshift.yml` — the only caller, on push to `main` under
   `base/**`, `microshift/**`, `services/**` or the workflows, and on `workflow_dispatch`.
   **Nothing runs on a pull request.**
@@ -366,6 +377,9 @@ whether `stable` moves on every green build or only after a hardware boot; wheth
 
 **Things that bit us — do not repeat.**
 
+- bib's `[customizations.installer.bootloader.grub2] menu-timeout` parses but does nothing for
+  `anaconda-iso`: osbuild/images honours it for bootc ISOs only from v80, and bib vendors
+  v0.251. The GRUB menu sat at 60 s on hardware. A bib key is proven only by the built ISO.
 - RHEL ships the C preprocessor as `cpp`; `flash.sh` dies with `FileNotFoundError: cpp`
   without it.
 - `apt-get --download-only install` skips installed packages; a Debian bundle needs a clean
@@ -391,6 +405,9 @@ whether `stable` moves on every green build or only after a hardware boot; wheth
   already fails the build or a lower layer's test — except `systemctl enable`, which only warns
   on a bad `[Install]`, and agreement between separately copied files (keyfile address vs.
   `nodeIP`).
+- `imagePullPolicy: Always` pulls even with the image in containers-storage, so on a node with
+  no registry an embedded image still ends in ImagePullBackOff. Unset, it defaults to `Always`
+  for `:latest` or no tag. Upstream KServe's manager ships with it; check each new upstream.
 - jq's `a // b` treats `false` as missing. Where an explicit `false` must win over a fallback,
   test for `null`.
 - A render-time check cannot see what a webhook injects. For KServe's `uidModelcar` the only
