@@ -133,17 +133,34 @@ jobs:
             -v /var/lib/containers/storage:/var/lib/containers/storage \
             registry.redhat.io/rhel9/bootc-image-builder:latest \
             --type anaconda-iso --config /config.toml "${{ inputs.image-ref }}"
-          mv output/bootiso/install.iso "output/$ISO_NAME"
-          (cd output && sha256sum ./*.iso > SHA256SUMS)
 
+      # bib ignores menu-timeout for anaconda-iso (osbuild/images honours it for
+      # bootc ISOs only from v80; bib vendors v0.251), so osbuild's 60 s stays.
+      # Patch both grub.cfg copies: on the ISO, and inside images/efiboot.img,
+      # the El Torito image UEFI boots, whose copy is the one GRUB reads.
+      - name: Set the GRUB menu timeout to 5 s
+        run: |
+          dnf -y install xorriso mtools
+          cd output
+          xorriso -osirrox on -indev bootiso/install.iso \
+            -extract /EFI/BOOT/grub.cfg grub.cfg -extract /images/efiboot.img efiboot.img
+          chmod u+w grub.cfg efiboot.img
+          grep -q '^set timeout=60$' grub.cfg \
+            || { echo "::error::no 'set timeout=60' in the ISO's grub.cfg"; cat grub.cfg; exit 1; }
+          sed -i 's/^set timeout=60$/set timeout=5/' grub.cfg
+          mcopy -o -i efiboot.img grub.cfg ::/EFI/BOOT/grub.cfg
+          xorriso -indev bootiso/install.iso -outdev "$ISO_NAME" -boot_image any replay \
+            -map grub.cfg /EFI/BOOT/grub.cfg -map efiboot.img /images/efiboot.img
+          rm -r grub.cfg efiboot.img bootiso
+
+      # Maximum zip compression. The ISO is mostly gzip'd layers and squashfs, so
+      # expect a small saving for several extra minutes of upload time.
       - uses: actions/upload-artifact@v4
         with:
           name: jetson-orin-bootc-${{ inputs.name }}-iso-${{ inputs.tag }}
-          path: |
-            output/*.iso
-            output/SHA256SUMS
+          path: output/*.iso
           retention-days: 7
-          compression-level: 0
+          compression-level: 9
 
       - name: Unregister
         if: always()
