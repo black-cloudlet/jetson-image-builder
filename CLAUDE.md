@@ -174,6 +174,9 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     `nvidia-device-plugin.yml` is curl'd. One iGPU means one GPU pod without slicing. No memory
     isolation between replicas, so the count is a claim about the SOM's RAM; 1 disables it.
     `renameByDefault` stays off, so the resource is plain `nvidia.com/gpu`.
+  - A second patch sets the container's `seLinuxOptions.type: spc_t`. As `container_t`,
+    SELinux denies the connect to `kubelet.sock` and the plugin loops on `Could not register
+    device plugin: context deadline exceeded` (seen on hardware). Capabilities stay dropped.
   - The smoke test checks how the render is **wired** (one container, `CONFIG_FILE` into a
     mounted ConfigMap with a replica count, `/var/lib/kubelet/device-plugins` mounted), never
     upstream field names: those change between tags and broke an earlier version of the check.

@@ -6,3 +6,4 @@ resources:
   - nvidia-device-plugin-config.yaml
 patches:
   - path: nvidia-device-plugin-time-slicing.yaml
+  - path: nvidia-device-plugin-selinux.yaml
