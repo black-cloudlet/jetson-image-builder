@@ -1,0 +1,7 @@
+# Node half of the local model cache: unused, and it mounts a hostPath.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kserve-localmodelnode-agent
+  namespace: kserve
+$patch: delete

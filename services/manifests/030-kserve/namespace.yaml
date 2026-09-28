@@ -1,0 +1,8 @@
+# kserve.yaml ships no namespace. The pod mutator skips namespaces with the
+# control-plane label, so InferenceServices must not be created here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kserve
+  labels:
+    control-plane: kserve-controller-manager

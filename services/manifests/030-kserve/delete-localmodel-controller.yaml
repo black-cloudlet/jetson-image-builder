@@ -1,0 +1,7 @@
+# Local model cache: off upstream, and models here arrive inside the image.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kserve-localmodel-controller-manager
+  namespace: kserve
+$patch: delete

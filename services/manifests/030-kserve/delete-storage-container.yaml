@@ -1,0 +1,8 @@
+# The storage initializer downloads models (s3://, hf://, http://). oci:// and
+# pvc:// never use it, so deleting this keeps its image out of the cache.
+apiVersion: serving.kserve.io/v1alpha1
+kind: ClusterStorageContainer
+metadata:
+  name: default
+  namespace: kserve
+$patch: delete

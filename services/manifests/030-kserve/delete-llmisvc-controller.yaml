@@ -1,0 +1,7 @@
+# LLM serving: unused here, and it pins runAsUser: 1000, which restricted-v2 refuses.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmisvc-controller-manager
+  namespace: kserve
+$patch: delete

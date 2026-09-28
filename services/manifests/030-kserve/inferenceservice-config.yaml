@@ -1,0 +1,46 @@
+# Each key is one JSON string, so a changed key is given whole; keys not named
+# here keep upstream's values. Diff against the release when bumping KSERVE_VER.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inferenceservice-config
+  namespace: kserve
+data:
+  # Upstream is Serverless, which needs Knative and Istio.
+  deploy: |-
+    {
+      "defaultDeploymentMode": "Standard"
+    }
+  # Only disableIngressCreation changes: an Ingress per InferenceService would
+  # name a host nothing here resolves. The gateway fields must stay non-empty.
+  ingress: |-
+    {
+        "enableGatewayApi": false,
+        "kserveIngressGateway": "kserve/kserve-ingress-gateway",
+        "ingressGateway" : "knative-serving/knative-ingress-gateway",
+        "localGateway" : "knative-serving/knative-local-gateway",
+        "localGatewayService" : "knative-local-gateway.istio-system.svc.cluster.local",
+        "ingressDomain"  : "example.com",
+        "ingressClassName" : "istio",
+        "domainTemplate": "{{ .Name }}-{{ .Namespace }}.{{ .IngressDomain }}",
+        "urlScheme": "http",
+        "disableIstioVirtualHost": false,
+        "disableIngressCreation": true,
+        "disableHTTPRouteTimeout": false
+    }
+  # Qualified image (not embedded; nothing here downloads), resources at 1:1 /
+  # 1:4, and no uidModelcar: KServe puts it on the modelcar sidecar and on
+  # kserve-container, and restricted-v2 refuses upstream's 1010.
+  storageInitializer: |-
+    {
+        "image" : "docker.io/kserve/storage-initializer:v0.20.0",
+        "memoryRequest": "1Gi",
+        "memoryLimit": "1Gi",
+        "cpuRequest": "250m",
+        "cpuLimit": "1",
+        "caBundleConfigMapName": "",
+        "caBundleVolumeMountPath": "/etc/ssl/custom-certs",
+        "enableModelcar": true,
+        "cpuModelcar": "10m",
+        "memoryModelcar": "15Mi"
+    }

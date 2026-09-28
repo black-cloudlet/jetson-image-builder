@@ -34,20 +34,23 @@ for root in "${roots[@]}"; do
 done
 
 # Prefixed to the jq programs below: every object in a render that makes pods,
-# and the pod spec inside it, wherever its kind keeps one.
+# and the pod spec inside it, wherever its kind keeps one. `pods` adds serving
+# runtimes, whose containers become every predictor pod.
 W='def workloads:
 	.[] | select(.kind | test("^(Deployment|DaemonSet|StatefulSet|Job|CronJob|Pod)$"));
 def podspec:
 	if .kind == "Pod" then .spec
 	elif .kind == "CronJob" then .spec.jobTemplate.spec.template.spec
-	else .spec.template.spec end;'
+	else .spec.template.spec end;
+def runtimes: .[] | select(.kind | test("^(Cluster)?ServingRuntime$"));
+def pods: (workloads | {o: "\(.kind)/\(.metadata.name)", s: podspec}),
+	(runtimes | {o: "\(.kind)/\(.metadata.name)", s: .spec});'
 
 echo "== workloads =="
 # kustomize fails the build on a patch that matches nothing, so a rename
 # upstream cannot slip through silently — but a workload upstream *adds* can,
-# and it would arrive with no resources and, in 020, with the runAsUser that
-# restricted-v2 refuses. Name the set both roots may contain; anything else has
-# to be looked at before it ships.
+# and it would arrive with no resources and possibly a pinned UID. Name the set
+# each root may contain; anything else has to be looked at before it ships.
 expect_workloads() {
 	name=$1 want=$2
 	got=$(jq -r "$W"' workloads | "\(.kind)/\(.metadata.name)"' "$render/$name.json" | sort)
@@ -68,6 +71,7 @@ expect_workloads 020-external-secrets \
 "Deployment/external-secrets
 Deployment/external-secrets-cert-controller
 Deployment/external-secrets-webhook"
+expect_workloads 030-kserve "Deployment/kserve-controller-manager"
 
 eso=$render/020-external-secrets.json
 
@@ -122,6 +126,75 @@ rootable=$(jq -r "$W"' workloads | .metadata.name as $w | podspec
 [[ -z $rootable ]] || fail "runAsNonRoot is not true on:" $rootable
 echo "   runAsNonRoot: true on every container"
 
+echo "== kserve configuration =="
+ksv=$render/030-kserve.json
+# One JSON string per key. Read per key: upstream's _example key mentions every
+# setting in comments.
+isvc_config() {
+	jq -er --arg k "$1" '.[] | select(.kind == "ConfigMap"
+		and .metadata.name == "inferenceservice-config") | .data[$k] | fromjson' "$ksv"
+}
+expect_config() {
+	key=$1 test=$2 why=$3
+	isvc_config "$key" | jq -e "$test" >/dev/null \
+		|| fail "inferenceservice-config $key: $test does not hold; $why"
+	echo "   $key: $test"
+}
+expect_config deploy '.defaultDeploymentMode == "Standard"' \
+	"anything else needs Knative and Istio, neither of which is installed"
+expect_config ingress '.disableIngressCreation == true' \
+	"an Ingress per InferenceService would name a host nothing here resolves"
+expect_config storageInitializer 'has("uidModelcar") | not' \
+	"restricted-v2 refuses every pod a pinned uidModelcar lands on"
+# Named only in this JSON string, which the image scan cannot see.
+si_image=$(isvc_config storageInitializer | jq -r .image)
+[[ $si_image == docker.io/kserve/storage-initializer:* ]] \
+	|| fail "storageInitializer image is $si_image," \
+		"want docker.io/kserve/storage-initializer:<tag>"
+echo "   storageInitializer image: $si_image"
+# For one upstream adds under another name; a renamed one fails the delete.
+csc=$(jq -r '.[] | select(.kind == "ClusterStorageContainer") | .metadata.name' "$ksv")
+[[ -z $csc ]] || fail "the kserve render carries a ClusterStorageContainer:" $csc
+echo "   no ClusterStorageContainer"
+
+echo "== restricted-v2 =="
+# Every pod template and serving runtime container, checked for what the SCC
+# requires rather than left for it to default, so a broken patch fails the
+# build instead of a pod. Pods KServe builds at run time are in no render.
+# The pod fallback tests for null, not //, as for runAsNonRoot above.
+for root in "${roots[@]}"; do
+	name=$(basename "$root")
+	out=$(jq -r "$W"'
+		def either($c; $p): if $c == null then $p else $c end;
+		pods | .o as $o | .s as $s | ($s.securityContext // {}) as $p
+		| (if [$p.runAsUser, $p.runAsGroup, $p.fsGroup] | any(. != null)
+			then "\($o): the pod pins a UID, GID or fsGroup" else empty end),
+		  (if [$s.hostNetwork, $s.hostPID, $s.hostIPC] | any(. == true)
+			then "\($o): shares a host namespace" else empty end),
+		  (if any($s.volumes[]?; .hostPath != null)
+			then "\($o): mounts a hostPath" else empty end),
+		  (($s.containers + ($s.initContainers // []))[]
+			| "\($o)/\(.name)" as $c | (.securityContext // {}) as $x
+			| (if [$x.runAsUser, $x.runAsGroup] | any(. != null)
+				then "\($c): pins a UID or GID" else empty end),
+			  (if $x.privileged == true then "\($c): privileged" else empty end),
+			  (if $x.allowPrivilegeEscalation != false
+				then "\($c): allowPrivilegeEscalation is not false" else empty end),
+			  (if any($x.capabilities.drop[]?; . == "ALL") | not
+				then "\($c): capabilities do not drop ALL" else empty end),
+			  (if ($x.capabilities.add // []) != []
+				then "\($c): adds capabilities" else empty end),
+			  (if either($x.runAsNonRoot; $p.runAsNonRoot) != true
+				then "\($c): runAsNonRoot is not true, on it or on the pod" else empty end),
+			  (if either($x.seccompProfile.type; $p.seccompProfile.type) != "RuntimeDefault"
+				then "\($c): seccompProfile is not RuntimeDefault, on it or on the pod"
+				else empty end))' "$render/$name.json")
+	[[ -z $out ]] || fail "$(sed "s|^|$name: |" <<<"$out")"
+	n=$(jq "[$W"' pods | .s | (.containers + (.initContainers // []))[]] | length' \
+		"$render/$name.json")
+	echo "   $name: $n containers, all admissible"
+done
+
 echo "== requests and limits =="
 # Upstream ships almost none of these, so every pod would be BestEffort and the
 # first thing evicted under pressure. The ratios are the house rule: memory
@@ -133,8 +206,8 @@ for root in "${roots[@]}"; do
 	name=$(basename "$root")
 	out=$(jq -r "$W"'
 		def cpu: tostring | if endswith("m") then .[:-1] | tonumber else tonumber * 1000 end;
-		workloads | .metadata.name as $w
-		| (podspec | .containers + (.initContainers // []))[]
+		pods | .o as $w
+		| (.s | .containers + (.initContainers // []))[]
 		| .resources as $r | "\($w)/\(.name): " +
 		if [$r.requests.cpu, $r.limits.cpu, $r.requests.memory, $r.limits.memory]
 			| any(. == null) then
@@ -168,8 +241,8 @@ while read -r img; do
 	# CRI-O resolves a short name against unqualified-search-registries
 	# (registry.access.redhat.com first, docker.io last) rather than looking
 	# in the local store first, so an unqualified reference is a pull attempt
-	# on a node that has no network. Both upstreams qualify their own images
-	# today; this is what notices if one stops. With no slash at all there is
+	# on a node that has no network. The upstreams qualify their own images
+	# today, or an images: transformer does; this is what notices if one stops. With no slash at all there is
 	# no host, only a name and its tag.
 	host=${img%%/*}
 	[[ $img == */* && ( $host == *.* || $host == *:* ) ]] \
@@ -181,6 +254,15 @@ while read -r img; do
 			"the build embeds what this same scan prints, check its log"
 	echo "   embedded: $img"
 done <<< "$images"
+
+# The ConfigMap's storage initializer is patched by hand and does not move
+# with KSERVE_VER.
+kserve_tags=$(printf '%s\n%s\n' "$images" "$si_image" |
+	sed -n 's|^docker\.io/kserve/[^:]*:\(.*\)$|\1|p' | sort -u)
+[[ $(wc -l <<< "$kserve_tags") -eq 1 ]] \
+	|| fail "docker.io/kserve images do not share one tag:" $kserve_tags \
+		"— bump KSERVE_VER and inferenceservice-config.yaml together"
+echo "   docker.io/kserve images all at $kserve_tags"
 
 echo "== embedded images =="
 # The whole mapping, not only what the manifests name: SERVICE_IMAGES adds

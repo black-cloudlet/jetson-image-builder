@@ -1,0 +1,48 @@
+# Triton on Tegra's iGPU: upstream's kserve-tritonserver with the -igpu image,
+# one GPU time slice, no runAsUser, and TensorRT/ONNX only.
+# The 25.02 tag is unverified against JetPack 6.2.2. Plan files only load in
+# the TensorRT inside this image, so build them with its trtexec, on an Orin.
+# Memory is 1:1 because the iGPU allocates from the RAM the cgroup counts.
+apiVersion: serving.kserve.io/v1alpha1
+kind: ClusterServingRuntime
+metadata:
+  name: triton-igpu
+spec:
+  protocolVersions:
+    - v2
+    - grpc-v2
+  supportedModelFormats:
+    - name: tensorrt
+      autoSelect: true
+      priority: 1
+    - name: onnx
+      version: "1"
+      autoSelect: true
+      priority: 1
+  containers:
+    - name: kserve-container
+      image: nvcr.io/nvidia/tritonserver:25.02-py3-igpu
+      args:
+        - tritonserver
+        - --model-store=/mnt/models
+        - --grpc-port=9000
+        - --http-port=8080
+        - --allow-grpc=true
+        - --allow-http=true
+      resources:
+        requests:
+          cpu: "1"
+          memory: 8Gi
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "4"
+          memory: 8Gi
+          nvidia.com/gpu: "1"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault

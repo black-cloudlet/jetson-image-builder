@@ -1,0 +1,20 @@
+# kserve.yaml is curl'd by the Containerfile (KSERVE_VER) and patched here.
+# Only kserve-controller-manager runs; the deletes remove workloads and objects
+# nothing here uses, and keep their images out of the cache.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - kserve.yaml
+# Keeps the release's tag. A non-matching entry is a silent no-op; the smoke
+# test catches an unqualified image.
+images:
+  - name: kserve/kserve-controller
+    newName: docker.io/kserve/kserve-controller
+patches:
+  - path: inferenceservice-config.yaml
+  - path: controller.yaml
+  - path: delete-llmisvc-controller.yaml
+  - path: delete-localmodel-controller.yaml
+  - path: delete-localmodelnode-agent.yaml
+  - path: delete-storage-container.yaml
