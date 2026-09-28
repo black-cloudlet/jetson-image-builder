@@ -210,7 +210,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   - `030-kserve/` — upstream `kserve.yaml` (`KSERVE_VER`, v0.20.0; v0.21.0 had no release
     assets and adds a DaemonSet with no nodeSelector). `kserve-cluster-resources.yaml` is not
     fetched: fourteen runtimes' images would be embedded. Only `kserve-controller-manager`
-    runs. Deleted, which also keeps their images out: `llmisvc-controller-manager` (LLM
+    runs; its manager is patched to `imagePullPolicy: IfNotPresent` (upstream says `Always`,
+    which was ErrImagePull on hardware with the image embedded). Deleted, which also keeps their images out: `llmisvc-controller-manager` (LLM
     serving, pins `runAsUser: 1000`), both local-model-cache workloads (off; the agent mounts a
     hostPath), and the `ClusterStorageContainer` (only downloading URIs use it). Their CRDs and
     webhooks stay; each matches only its own kinds.
@@ -238,8 +239,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   **Smoke test**: renders every root with `oc kustomize` and checks the workload set per root;
   External Secrets without `runAsUser`, with `runAsNonRoot`, in its own namespace and naming
   `default` nowhere outside its CRDs; `inferenceservice-config` values; every pod template and
-  serving-runtime container admissible under restricted-v2; requests, limits and ratios; every
-  image qualified and embedded; no `ClusterStorageContainer`; one KServe tag. It prints
+  serving-runtime container admissible under restricted-v2; requests, limits and ratios; no
+  container whose pull policy is, or defaults to, `Always`; every image qualified and embedded; no `ClusterStorageContainer`; one KServe tag. It prints
   `du -sh` of the cache, which the eMMC pays for twice (`/usr` and containers-storage). Pods
   KServe builds at run time are in no render: their admission and GPU access are hardware
   questions.
@@ -397,6 +398,9 @@ whether `stable` moves on every green build or only after a hardware boot; wheth
   already fails the build or a lower layer's test — except `systemctl enable`, which only warns
   on a bad `[Install]`, and agreement between separately copied files (keyfile address vs.
   `nodeIP`).
+- `imagePullPolicy: Always` pulls even with the image in containers-storage, so on a node with
+  no registry an embedded image still ends in ImagePullBackOff. Unset, it defaults to `Always`
+  for `:latest` or no tag. Upstream KServe's manager ships with it; check each new upstream.
 - jq's `a // b` treats `false` as missing. Where an explicit `false` must win over a fallback,
   test for `null`.
 - A render-time check cannot see what a webhook injects. For KServe's `uidModelcar` the only
