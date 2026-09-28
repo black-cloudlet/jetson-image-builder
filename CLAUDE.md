@@ -257,7 +257,10 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `ostreecontainer`; `[customizations.user]`/`filesystem` cannot be combined with it):
   `text --non-interactive`, `timezone Asia/Jerusalem --utc`, static `192.168.1.10/24` gw
   `192.168.1.254` on `eth0`, `--nameserver=192.168.1.1` (must answer, or every lookup waits out
-  the glibc timeout), `--domain=cloudlet.local`, `--hostname=jetson-1`,
+  the glibc timeout), `--no-activate` (anaconda otherwise brings up the first `network` device
+  and waits for it; the install reads only the ISO, so no cable is needed),
+  `--ipv4-dns-search=cloudlet.local` (there is no `--domain`; an unknown option fails the parse
+  and stops the installer before its UI), `--hostname=jetson-1`,
   `ignoredisk --only-use=mmcblk0`, `clearpart --all`, `reqpart --add-boot`, VG `rhel` with a
   40 GiB xfs root, **no swap**, and **~16.5 GiB left free for LVMS** (fill the VG and the
   cluster has no dynamic PVs). Root locked; user `cloudlet` in `wheel` from
@@ -292,7 +295,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `bootc-fetch-apply-updates.timer`: it fails every day the registry is unreachable.
 - `.github/workflows/build-iso.yml` — **reusable**: register, substitute the `@JETSON_*@`
   placeholders in bash with secrets in `env:` (a `&`, quote or newline would break `sed`),
-  reject an empty or non-crypt password hash, run
+  reject an empty or non-crypt password hash, validate the rendered kickstart with RHEL's
+  `ksvalidator -v RHEL9` (bib does not, and a parse failure only shows on hardware), run
   `registry.redhat.io/rhel9/bootc-image-builder --type anaconda-iso`, then rewrite the ISO's
   GRUB menu timeout from 60 s to 5 s with `xorriso`/`mtools`: in `/EFI/BOOT/grub.cfg` and in
   the copy inside `images/efiboot.img`, which is the one UEFI GRUB reads
@@ -385,6 +389,9 @@ whether `stable` moves on every green build or only after a hardware boot; wheth
   test proves nothing about the GPU; boot hardware before promoting a tag.
 - `nvidia-ctk runtime configure --config=…/99-nvidia.conf` writes `99-nvidia.toml` and exits 0.
   CRI-O reads either; only a check spelling the name notices. Ask for `.toml`.
+- A kickstart option anaconda does not know (`--domain` was one) stops the installer at the
+  systemd log with no visible error, and bib builds the ISO anyway. `build-iso.yml` runs
+  `ksvalidator -v RHEL9` on the rendered `contents`; locally, pip `pykickstart` does the same.
 - A bare `test` exits 1 silently. Every check names what it looked for and lists the directory.
 - podman in a `container:` job silently loses the native overlay diff (overlayfs storage, or
   `metacopy=on`). Keep the `/scratch` bind, the `metacopy` strip and the check.
