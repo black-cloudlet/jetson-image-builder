@@ -1,5 +1,6 @@
-# Layer 2, shared: the image-embedding machinery and jtop. The images it replays
-# are embedded by the layers above — never here, where every variant pays.
+# Layer 2, shared: the image-embedding machinery, jtop and the Edge Manager
+# agent. The images it replays are embedded by the layers above — never here,
+# where every variant pays.
 ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-base:latest
 FROM ${BASE_IMAGE}
 
@@ -24,5 +25,32 @@ COPY --chmod=0555 base/physically-bound-images/copy_embedded_images.sh \
 COPY --chmod=0644 base/physically-bound-images/copy-embedded-images.service \
       /usr/lib/systemd/system/copy-embedded-images.service
 RUN systemctl enable copy-embedded-images.service
+
+# Red Hat Edge Manager (flightctl) agent, idle until a device is enrolled.
+# RHEM_VER should match the Edge Manager server. Weak dependencies off: the
+# agent recommends flightctl-greenboot, and greenboot rolls a node back on
+# failed health checks, which is its own decision.
+ARG RHEM_VER=1.2
+RUN dnf install -y --setopt=install_weak_deps=False \
+        --enablerepo="edge-manager-${RHEM_VER}-for-rhel-9-$(uname -m)-rpms" \
+        flightctl-agent && \
+    systemctl enable flightctl-agent.service && \
+    dnf clean all
+
+# Enabled, but it only starts once an enrollment config is present — baked into
+# a later layer, written by a kickstart %post, or copied in by hand. Without one
+# the agent exits and systemd restarts it every minute, forever.
+COPY <<'EOF' /usr/lib/systemd/system/flightctl-agent.service.d/10-enrollment.conf
+[Unit]
+ConditionPathExists=/etc/flightctl/config.yaml
+EOF
+
+# Once enrolled, Edge Manager owns OS updates; bootc's own daily upgrade would
+# race it. Red Hat masks the timer outright, which would also stop a node that
+# never enrolls, so it is skipped on the same file instead.
+COPY <<'EOF' /usr/lib/systemd/system/bootc-fetch-apply-updates.service.d/10-flightctl.conf
+[Unit]
+ConditionPathExists=!/etc/flightctl/config.yaml
+EOF
 
 RUN bootc container lint

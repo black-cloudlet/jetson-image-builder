@@ -33,4 +33,31 @@ if ! command -v jtop; then
 	exit 1
 fi
 
+echo "== edge manager agent =="
+rpm -qa 'flightctl*' | sort
+if [[ ! -L $wants/flightctl-agent.service ]]; then
+	echo "not enabled: flightctl-agent.service"
+	ls -la "$wants" | sed 's/^/   /'
+	exit 1
+fi
+
+# A drop-in for a unit that does not exist is ignored without a word, so a
+# renamed unit would leave the agent restarting unenrolled, or bootc's timer
+# racing Edge Manager once it is enrolled.
+for unit in flightctl-agent.service bootc-fetch-apply-updates.service; do
+	if [[ ! -f /usr/lib/systemd/system/$unit ]]; then
+		echo "drop-in target missing: /usr/lib/systemd/system/$unit"
+		ls /usr/lib/systemd/system | grep -E 'flightctl|bootc' | sed 's/^/   /'
+		exit 1
+	fi
+done
+
+# Both drop-ins key on this file; one shipped here would enroll every device of
+# every variant into whichever Edge Manager issued it.
+if [[ -e /etc/flightctl/config.yaml ]]; then
+	echo "unexpected enrollment config in the bound-images layer:"
+	ls -la /etc/flightctl | sed 's/^/   /'
+	exit 1
+fi
+
 echo "all checks passed"
