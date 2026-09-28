@@ -1,5 +1,8 @@
 # Resources, memory 1:1 and CPU 1:4. Upstream breaks both ratios on the
 # manager and sets none on kube-rbac-proxy.
+# Upstream also sets imagePullPolicy: Always on the manager, so the kubelet
+# asks the registry even with the image in containers-storage: ErrImagePull
+# on a node with no network.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -10,6 +13,7 @@ spec:
     spec:
       containers:
         - name: manager
+          imagePullPolicy: IfNotPresent
           resources:
             requests:
               cpu: 100m

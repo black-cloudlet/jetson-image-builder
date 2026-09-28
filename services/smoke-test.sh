@@ -228,6 +228,25 @@ for root in "${roots[@]}"; do
 	echo "   $name: $(wc -l <<<"$out") containers, memory 1:1, cpu 1:4"
 done
 
+echo "== pull policy =="
+# Always makes the kubelet ask the registry even with the image already in
+# containers-storage, which on a node with no network is ErrImagePull with the
+# image sitting right there. KServe's manager shipped that way. Unset, the API
+# server defaults to Always for a :latest or untagged reference, IfNotPresent
+# for anything else, a digest included; the check applies the same rule.
+for root in "${roots[@]}"; do
+	name=$(basename "$root")
+	out=$(jq -r "$W"'
+		pods | .o as $o | (.s | .containers + (.initContainers // []))[]
+		| (.imagePullPolicy // (if (.image | split("/") | last | test("[:@]") | not)
+			or (.image | endswith(":latest")) then "Always (defaulted)"
+			else "IfNotPresent" end)) as $p
+		| select($p | test("^(IfNotPresent|Never)$") | not)
+		| "\($o)/\(.name): \(.image) pulls \($p)"' "$render/$name.json")
+	[[ -z $out ]] || fail "$(sed "s|^|$name: |" <<<"$out")"
+	echo "   $name: no container pulls Always"
+done
+
 echo "== images the manifests name =="
 # A manifest naming an image that was not embedded means ImagePullBackOff on a
 # node with no registry. Captured first: a scan that fails inside `< <(...)`
