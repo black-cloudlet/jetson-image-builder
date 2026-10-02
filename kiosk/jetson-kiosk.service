@@ -1,7 +1,7 @@
 [Unit]
 Description=Kiosk: Firefox on the DisplayPort output
 # tty1 is the session's VT: logind grants the seat's DRM and input devices to
-# the active session there, which is what lets X run without root.
+# the active session there, which is what lets the compositor run without root.
 After=systemd-user-sessions.service getty@tty1.service
 Conflicts=getty@tty1.service
 # Waiting for a monitor can mean days; every exit starts it again.
@@ -28,7 +28,8 @@ RestartSec=5
 # The screen loses when the CPU runs short, never the pods: a low weight under
 # contention and a hard ceiling at all times. A low-weight stall shows as
 # dropped frames; the MemoryMax kill restarts the session. Both sizes are
-# guesses until the busiest screen is measured on the device.
+# guesses until the busiest screen is measured on the device. GPU time has no
+# such control: the screen and Triton share it unmetered.
 CPUWeight=20
 CPUQuota=300%
 MemoryMax=2G

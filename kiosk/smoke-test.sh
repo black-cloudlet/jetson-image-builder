@@ -3,8 +3,8 @@
 #   podman run --rm -i "$IMAGE:$TAG" bash -s < kiosk/smoke-test.sh
 #
 # This proves the layer is wired together. Whether a picture leaves the DP port,
-# whether hotplug is seen and whether the GPU stays idle are hardware questions:
-# no display driver is loaded in a container.
+# whether hotplug is seen and whether the compositor really runs on the GPU are
+# hardware questions: no display driver is loaded in a container.
 set -euo pipefail
 
 fail() { echo "$*"; exit 1; }
@@ -30,47 +30,43 @@ echo "== kiosk user =="
 unit_user=$(sed -n 's/^User=//p' /usr/lib/systemd/system/jetson-kiosk.service)
 awk -v u="$unit_user" '$1 == "u" && $2 == u { found = 1 } END { exit !found }' \
 	/usr/lib/sysusers.d/jetson-kiosk.conf \
-	|| fail "jetson-kiosk.service runs as '$unit_user', which /usr/lib/sysusers.d/jetson-kiosk.conf does not create"
+	|| fail "jetson-kiosk.service runs as '$unit_user'," \
+		"which /usr/lib/sysusers.d/jetson-kiosk.conf does not create"
 echo "   $unit_user"
 
-echo "== what the scripts run =="
-# Package names are checked by dnf; the commands the scripts call by name are
+echo "== what the script runs =="
+# Package names are checked by dnf; the commands the script calls by name are
 # not, and a missing one fails only once a monitor is plugged in.
-for cmd in xinit gnome-kiosk firefox curl; do
+for cmd in gnome-kiosk firefox curl; do
 	command -v "$cmd" || fail "not on PATH: $cmd ($PATH)"
 done
-[[ -x /usr/bin/Xorg ]] || missing /usr/bin/Xorg /usr/bin
-for s in /opt/jetson-kiosk/kiosk.sh /opt/jetson-kiosk/session.sh; do
-	bash -n "$s" || fail "syntax error in $s"
-done
+bash -n /opt/jetson-kiosk/kiosk.sh || fail "syntax error in /opt/jetson-kiosk/kiosk.sh"
 
-echo "== software rendering only =="
-# session.sh pins glvnd to Mesa by name and by file. A name or path that does
-# not exist leaves the session with no GL at all, and GNOME Kiosk does not start.
-egl=$(sed -n 's/^export __EGL_VENDOR_LIBRARY_FILENAMES=//p' /opt/jetson-kiosk/session.sh)
-[[ -f $egl ]] || missing "$egl (the EGL vendor session.sh names)" "${egl%/*}"
-[[ -e /usr/lib64/libGLX_mesa.so.0 ]] \
-	|| missing "/usr/lib64/libGLX_mesa.so.0 (__GLX_VENDOR_LIBRARY_NAME=mesa)" /usr/lib64
-[[ -e /usr/lib64/dri/swrast_dri.so ]] \
-	|| missing "/usr/lib64/dri/swrast_dri.so (the software renderer)" /usr/lib64/dri
+echo "== NVIDIA EGL and GBM =="
+# The compositor reaches the GPU through glvnd's EGL vendor list and a GBM
+# backend named after the DRM driver. The vendor image is what would carry
+# them; without them there is no GPU path at all, and mutter either fails or
+# falls back to whatever Mesa offers.
+vendors=/usr/share/glvnd/egl_vendor.d
+grep -l 'libEGL_nvidia' "$vendors"/*.json \
+	|| missing "an EGL vendor file naming libEGL_nvidia (NVIDIA's EGL)" "$vendors"
+gbm=$(find /usr/lib64 -name '*nvidia*gbm*.so*' 2>/dev/null || true)
+[[ -n $gbm ]] || missing "an NVIDIA GBM library or backend under /usr/lib64" /usr/lib64/gbm
+echo "$gbm" | sed 's/^/   /'
 
-# An xorg.conf from below takes part in the same configuration as our snippet,
-# and a second Device section naming NVIDIA's driver would put X on the GPU.
-[[ ! -e /etc/X11/xorg.conf ]] \
-	|| fail "/etc/X11/xorg.conf exists and would be merged with 90-jetson-kiosk.conf:" \
-		"$(sed 's/^/   /' /etc/X11/xorg.conf)"
+echo "== no VT switching =="
+# An override naming a key the schema does not have is skipped with a warning
+# at compile time, not an error.
+got=$(GSETTINGS_BACKEND=memory gsettings get \
+	org.gnome.mutter.wayland.keybindings switch-to-session-2 2>&1) \
+	|| fail "no org.gnome.mutter.wayland.keybindings in the compiled schemas: $got"
+[[ $got == "@as []" ]] \
+	|| fail "switch-to-session-2 is $got, not empty: 90-jetson-kiosk.gschema.override did not apply"
 
+echo "== firefox policies =="
 # A policies.json that does not parse is ignored whole: Firefox then runs with
-# hardware acceleration and nothing locked down, and says so only in about:policies.
-python3 - /etc/firefox/policies/policies.json <<'EOF'
-import json, sys
-p = json.load(open(sys.argv[1]))["policies"]
-if p.get("HardwareAcceleration") is not False:
-    sys.exit("HardwareAcceleration is not false in " + sys.argv[1])
-wr = p.get("Preferences", {}).get("gfx.webrender.software", {})
-if wr.get("Value") is not True or wr.get("Status") != "locked":
-    sys.exit("gfx.webrender.software is not locked to true in " + sys.argv[1])
-EOF
-echo "   no GPU in X, GL or Firefox"
+# nothing locked down, and says so only in about:policies.
+python3 -m json.tool /etc/firefox/policies/policies.json >/dev/null \
+	|| fail "/etc/firefox/policies/policies.json does not parse"
 
 echo "all checks passed"

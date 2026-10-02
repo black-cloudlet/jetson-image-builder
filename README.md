@@ -30,8 +30,8 @@ time and shipped inside one OS image:
 - the Kubernetes distribution (MicroShift 4.20) and its GPU device plugin;
 - the services that run on the cluster (cert-manager, External Secrets, KServe and a Triton
   model server);
-- a kiosk: Firefox fullscreen on the DisplayPort output, drawn on the CPU so the GPU stays the
-  model's;
+- a kiosk: Firefox fullscreen on the DisplayPort output, drawn on the GPU it shares with the
+  model;
 - **every container image** any of the above will ever start, so the cluster comes up with no
   registry reachable.
 
@@ -96,7 +96,7 @@ digest, and each is pushed to GHCR on its own as `ghcr.io/black-cloudlet/jetson-
    │
  bound-images    image-embedding machinery + jtop
    │
- kiosk           Firefox on the DisplayPort output, CPU only
+ kiosk           Firefox on the DisplayPort output (GNOME Kiosk, Wayland, GPU)
    │
  microshift      MicroShift 4.20 + NVIDIA device plugin (GPU time slicing) + their images
    │
@@ -109,7 +109,7 @@ digest, and each is pushed to GHCR on its own as `ghcr.io/black-cloudlet/jetson-
 |---|---|---|---|---|
 | base | `base/Containerfile.base` | `jetson-orin-bootc-base` | nothing: a pure republish of the vendor image | no (registers anyway, one code path) |
 | bound-images | `base/Containerfile.podman` | `jetson-orin-bootc-bound-images` | the scripts and boot unit that embed and restore container images; `jtop` | yes (`python3-pip`) |
-| kiosk | `kiosk/Containerfile` | `jetson-orin-bootc-kiosk` | Xorg, GNOME Kiosk, Firefox, the kiosk service | yes (AppStream) |
+| kiosk | `kiosk/Containerfile` | `jetson-orin-bootc-kiosk` | GNOME Kiosk, Firefox, the kiosk service | yes (AppStream) |
 | microshift | `microshift/Containerfile` | `jetson-orin-bootc-microshift` | MicroShift, firewall, node networking, GPU device plugin, 9+ embedded images | yes (`rhocp` + `fast-datapath` repos) |
 | services | `services/Containerfile` | `jetson-orin-bootc-services` | four kustomize roots applied by MicroShift, 7 embedded images | no RPMs |
 
@@ -163,33 +163,31 @@ The file name and the image name differ: `Containerfile.podman` builds the image
 and the browser stops. It is shared, below the variant, because nothing in it is about the
 cluster.
 
-**No GPU, by construction.** The Orin's one GPU belongs to Triton, and the screen runs outside
-Kubernetes where the device plugin cannot count it. So every drawing step is on the CPU:
-- **X**: Xorg's `modesetting` driver with `AccelMethod none` (`kiosk/xorg.conf`). It drives any
-  display with a kernel driver and never touches the GPU. NVIDIA's own X driver is not used.
-- **The window manager**: GNOME Kiosk, in X11 mode, with GL pinned to Mesa's software renderer
-  (`__GLX_VENDOR_LIBRARY_NAME=mesa`, `LIBGL_ALWAYS_SOFTWARE=1`). It is there because without a
-  window manager Firefox cannot go fullscreen and nothing turns on a monitor plugged in after X
-  started. It is the only one RHEL ships for this.
-- **Firefox**: hardware acceleration off and software WebRender, locked by policy.
+**Drawn on the GPU.** GNOME Kiosk is the Wayland compositor, driving the display directly through
+NVIDIA's EGL and GBM; Firefox is its only window, a native Wayland client with hardware WebRender
+(whether Firefox's blocklist lets it use the Tegra driver shows in `about:support`). There is no
+Xorg, no Xwayland (`--no-x11`) and no GDM. The GPU is shared with Triton **unmetered**: the
+screen runs outside Kubernetes, so the device plugin's time slices cannot count it. This was the
+maintainer's call, because live video drawn on the CPU costs cores the pods need. Video
+decoding stays on the CPU either way: Firefox has no hardware decoder on Jetson.
 
-Getting the picture out of the port is the display controller's job, separate hardware that costs
-the model nothing. Video decoding was on the CPU anyway: Firefox has no hardware decoder on Jetson.
-
-**How it runs.** `jetson-kiosk.service` runs as the `kiosk` user (from `sysusers.d`: no password,
-no shell) on tty1, which gives the session the seat's display and input devices without root:
-1. `kiosk.sh` waits until a DRM connector reports `connected`. With no monitor, nothing runs: no
-   X, no Firefox decoding video for an empty port.
+**How it runs.** `jetson-kiosk.service` runs `kiosk.sh` as the `kiosk` user (from `sysusers.d`:
+no password, no shell) on tty1, which gives the session the seat's display and input devices
+without root:
+1. It waits until a DRM connector reports `connected`. With no monitor, nothing runs: no
+   compositor, no Firefox decoding video for an empty port.
 2. It waits until `KIOSK_URL` answers with anything but a 5xx, since MicroShift needs minutes
    after boot. The screen stays black meanwhile.
-3. It starts X with `session.sh`, which starts GNOME Kiosk and then Firefox in kiosk mode on a
-   fresh profile on tmpfs (no state between sessions, no profile writes on the eMMC).
+3. It starts `gnome-kiosk --wayland --display-server --no-x11`, waits up to 30 s for its socket,
+   then starts Firefox in kiosk mode on a fresh profile on tmpfs (no state between sessions, no
+   profile writes on the eMMC).
 4. Ten seconds without a monitor, Firefox exiting, or GNOME Kiosk dying ends the session.
    systemd starts it again, back at step 1.
 
 **Who loses when the CPU runs short: the screen.** The unit has `CPUWeight=20` (pods win under
 contention), `CPUQuota=300%` and `MemoryMax=2G`. Starved, the video on screen drops frames and
-detection runs at full speed. Both sizes are guesses until the busiest screen is measured.
+detection runs at full speed. Both sizes are guesses until the busiest screen is measured. GPU
+time has no such control.
 
 **Configuration.**
 - `/etc/jetson-kiosk.conf` holds `KIOSK_URL`. It is in `/etc` so one device can point elsewhere
@@ -199,16 +197,17 @@ detection runs at full speed. Both sizes are guesses until the busiest screen is
 - `/etc/firefox/policies/policies.json`: no updates, telemetry, studies or safe-browsing
   downloads (all would try the internet), no OpenH264 download, no disk cache, no crash-restore
   page, no developer tools, `about:config` or private windows.
-- Ctrl-Alt-Fn is off (`DontVTSwitch`); administration is over SSH.
+- Ctrl-Alt-Fn is off: mutter's VT-switch key bindings are emptied in a schema override.
+  Administration is over SSH.
 
 **What the frontend has to live with** on this screen: no H.264 video (RHEL's Firefox has no
-decoder for it, and the OpenH264 plugin is a download), nothing loaded from the internet, no
-reliance on WebGL, and reconnecting its own streams, since nobody can press reload.
+decoder for it, and the OpenH264 plugin is a download), nothing loaded from the internet, and
+reconnecting its own streams, since nobody can press reload.
 
 Its smoke test checks the service is enabled, that its user is the one `sysusers.d` creates, that
-every command the scripts call exists and the scripts parse, that the Mesa GL files the session
-pins exist, that no `/etc/X11/xorg.conf` from below could put X on NVIDIA's driver, and that the
-policy file parses with acceleration off.
+every command the script calls exists and the script parses, that the image carries NVIDIA's EGL
+vendor file and a GBM library (without them there is no GPU path, so the layer fails), that the
+VT-switch override applied, and that the policy file parses.
 
 ### microshift: Kubernetes and the GPU
 
@@ -513,8 +512,8 @@ reboots ejecting the media.
    ```
    lsmod | grep -E 'nvidia_drm|nvidia_modeset'   # the display driver; without it nothing shows
    cat /sys/class/drm/card*-*/status             # flips to connected/disconnected with the cable
-   journalctl -u jetson-kiosk -f                 # waiting for a monitor / for the URL / starting X
-   tegrastats                                    # GR3D_FREQ 0% with the kiosk playing video
+   journalctl -u jetson-kiosk -f                 # waiting for a monitor / for the URL / compositor
+   tegrastats                                    # GR3D_FREQ: the screen's share of the GPU
    ```
 
 A pod in `ImagePullBackOff` means an image was not embedded: check
@@ -652,9 +651,9 @@ would come back (its `Containerfile` still defaults to bound-images).
   in `/etc/ostree/auth.json`.
 - **The address and hostname are per ISO, not per device.**
 - **The kiosk is unverified on hardware.** Whether the base image carries the Jetson display
-  driver, whether X picks the right DRM card, and the CPU cost of the frontend's video all need
-  the device. `KIOSK_URL` is a placeholder, and nothing reserves the screen's CPU and RAM from
-  the kubelet yet.
+  driver, whether mutter 40 runs on NVIDIA's GBM, how much GPU the screen takes from Triton, and
+  the CPU cost of the frontend's video all need the device. `KIOSK_URL` is a placeholder, and
+  nothing reserves the screen's CPU and RAM from the kubelet yet.
 
 The design record, with every decision and why, is `CLAUDE.md`.
 
@@ -669,11 +668,12 @@ The design record, with every decision and why, is `CLAUDE.md`.
 | `base/physically-bound-images/embed_image.sh` | build time: copy one image into the cache in `/usr` |
 | `base/physically-bound-images/copy_embedded_images.sh` | boot time: restore the cache, prune what an older OS left |
 | `base/physically-bound-images/copy-embedded-images.service` | runs it once per boot, before MicroShift |
-| `kiosk/Containerfile` | layer 3: Xorg, GNOME Kiosk, Firefox, the kiosk service |
-| `kiosk/kiosk.sh`, `kiosk/session.sh` | wait for a monitor and the URL, then X; the X session |
+| `kiosk/Containerfile` | layer 3: GNOME Kiosk, Firefox, the kiosk service |
+| `kiosk/kiosk.sh` | waits for a monitor and the URL, then the compositor and Firefox |
 | `kiosk/jetson-kiosk.service` | runs it as `kiosk` on tty1, restarts it, caps its CPU and RAM |
 | `kiosk/jetson-kiosk.conf` | `KIOSK_URL` |
-| `kiosk/xorg.conf`, `kiosk/policies.json`, `kiosk/sysusers.conf` | X without GPU, Firefox lockdown, the `kiosk` user |
+| `kiosk/policies.json`, `kiosk/sysusers.conf` | Firefox lockdown, the `kiosk` user |
+| `kiosk/jetson-kiosk.gschema.override` | no Ctrl-Alt-Fn VT switching |
 | `kiosk/smoke-test.sh` | checks the layer is wired together |
 | `microshift/Containerfile` | layer 4: MicroShift, firewall, node IP, GPU device plugin, their images |
 | `microshift/manifests/` | device-plugin kustomization and the GPU time-slicing config |
