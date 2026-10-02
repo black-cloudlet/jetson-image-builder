@@ -1,7 +1,7 @@
-# base -> bound-images -> microshift -> services -> ISO. Each layer builds on
-# the previous one's digest, so a change to a service image does not re-pull
-# MicroShift's control plane and vice versa. The ISO is built from the top of
-# the chain, which is services, not microshift.
+# base -> bound-images -> kiosk -> microshift -> services -> ISO. Each layer
+# builds on the previous one's digest, so a change to a service image does not
+# re-pull MicroShift's control plane and vice versa. The ISO is built from the
+# top of the chain, which is services, not microshift.
 name: microshift image + installer ISO
 
 on:
@@ -9,6 +9,7 @@ on:
     branches: [main]
     paths:
       - base/**
+      - kiosk/**
       - microshift/**
       - services/**
       - .github/workflows/build-microshift.yml
@@ -18,7 +19,7 @@ on:
 
 jobs:
   # The pinned vendor image, republished. Shared by every variant.
-  # `stable` on every layer so the four images can be mirrored as one set; the
+  # `stable` on every layer so the five images can be mirrored as one set; the
   # OpenShift version tag goes only on the layers that contain MicroShift.
   base:
     uses: ./.github/workflows/build-image.yml
@@ -46,19 +47,34 @@ jobs:
     secrets: inherit
     permissions: { contents: read, packages: write }
 
+  # Firefox on the DisplayPort output, on the CPU only. Shared: nothing in it is
+  # about the cluster, so it sits below the variant and a service change never
+  # reinstalls it.
+  kiosk:
+    needs: bound_images
+    uses: ./.github/workflows/build-image.yml
+    with:
+      name: kiosk
+      containerfile: kiosk/Containerfile
+      smoke-test: kiosk/smoke-test.sh
+      build-args: BASE_IMAGE=${{ needs.bound_images.outputs.image-ref }}
+      extra-tags: stable
+    secrets: inherit
+    permissions: { contents: read, packages: write }
+
   # USHIFT_VER is passed to the build and used as a tag from the same two lines:
   # a 4.20 tag on an image built from another channel would be a claim nothing
   # enforces. The env context is not available to a reusable workflow's `with:`,
   # so it is written twice rather than once — keep them together.
   microshift:
-    needs: bound_images
+    needs: kiosk
     uses: ./.github/workflows/build-image.yml
     with:
       name: microshift
       containerfile: microshift/Containerfile
       smoke-test: microshift/smoke-test.sh
       build-args: |
-        BASE_IMAGE=${{ needs.bound_images.outputs.image-ref }}
+        BASE_IMAGE=${{ needs.kiosk.outputs.image-ref }}
         USHIFT_VER=4.20
       extra-tags: stable 4.20
     secrets: inherit

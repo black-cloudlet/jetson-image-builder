@@ -1,0 +1,37 @@
+[Unit]
+Description=Kiosk: Firefox on the DisplayPort output
+# tty1 is the session's VT: logind grants the seat's DRM and input devices to
+# the active session there, which is what lets X run without root.
+After=systemd-user-sessions.service getty@tty1.service
+Conflicts=getty@tty1.service
+# Waiting for a monitor can mean days; every exit starts it again.
+StartLimitIntervalSec=0
+
+[Service]
+User=kiosk
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+UtmpMode=user
+StateDirectory=jetson-kiosk
+EnvironmentFile=/etc/jetson-kiosk.conf
+ExecStart=/opt/jetson-kiosk/kiosk.sh
+Restart=always
+RestartSec=5
+
+# The screen loses when the CPU runs short, never the pods: a low weight under
+# contention and a hard ceiling at all times. A low-weight stall shows as
+# dropped frames; the MemoryMax kill restarts the session. Both sizes are
+# guesses until the busiest screen is measured on the device.
+CPUWeight=20
+CPUQuota=300%
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

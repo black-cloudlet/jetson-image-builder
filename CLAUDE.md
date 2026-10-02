@@ -23,6 +23,9 @@ reaches the internet.
   `ClusterServingRuntime`, from `services/`. Still to come: PostgreSQL, RabbitMQ, the first
   `InferenceService`
 - Every container image physically bound into the OS image (zero network at first boot)
+- A kiosk: plugging a monitor into the Jetson's DisplayPort opens the frontend in Firefox
+  fullscreen, drawn on the **CPU only** so the GPU stays Triton's. It must be on the Jetson
+  itself (maintainer's requirement; a separate display box was offered and declined)
 
 **Model serving is upstream KServe, not Red Hat's**: `microshift-ai-model-serving` is x86_64
 only. KServe was removed once before (`bba9d10`, reason unrecorded).
@@ -98,11 +101,14 @@ only. KServe was removed once before (`bba9d10`, reason unrecorded).
    and every commit walks the rootfs (~20 of 24 build minutes). RHEL's `storage.conf` sets
    `metacopy=on`, which defeats it too, so the step strips it and fails unless `podman info`
    reports `Native Overlay Diff:true`.
-7. **Four layers for microshift, one directory per Kubernetes variant.**
+7. **Five layers for microshift, one directory per Kubernetes variant.**
    - `base/Containerfile.base` republishes the pinned vendor image under our name.
    - `base/Containerfile.podman` adds the physically-bound-images machinery and `jtop`.
      Published as `jetson-orin-bootc-bound-images` from CI job `bound_images` (an underscore:
      `needs.bound-images` parses as a subtraction and resolves to nothing).
+   - `kiosk/` adds Xorg, GNOME Kiosk, Firefox and `jetson-kiosk.service`. Shared, below the
+     variant: nothing in it is about the cluster, so a service change never reinstalls it; a
+     kiosk change does re-run MicroShift's install and image pulls (accepted: it changes rarely).
    - `microshift/` adds MicroShift, the device plugin and their images.
    - `services/` holds what runs on the cluster, one numbered kustomize root per component,
      with every image they name embedded.
@@ -110,10 +116,11 @@ only. KServe was removed once before (`bba9d10`, reason unrecorded).
    MicroShift install and re-pull its nine images. Each layer is pushed as
    `jetson-orin-bootc-<name>` and the next builds on its **digest**. CI is two reusable
    workflows (`build-image.yml`, `build-iso.yml`) plus `build-microshift.yml`, chaining base →
-   bound-images → microshift → services → ISO. The build context is the repo root. Every layer
-   registers with subscription-manager, even the one that installs nothing: one code path.
-   `k3s/` would reuse both shared layers, but it has no services layer: `services/` embeds into
-   podman's containers-storage and writes `/etc/microshift/manifests.d`, and k3s reads neither.
+   bound-images → kiosk → microshift → services → ISO. The build context is the repo root. Every
+   layer registers with subscription-manager, even the one that installs nothing: one code path.
+   `k3s/` would reuse the shared layers (its `Containerfile` still defaults to bound-images), but
+   it has no services layer: `services/` embeds into podman's containers-storage and writes
+   `/etc/microshift/manifests.d`, and k3s reads neither.
 8. **NVIDIA BSP download stays manual** (documented in `README.md`). Scripting it was fragile.
 
 ## What is done and working
@@ -161,6 +168,49 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     Otherwise the first thing to prune would be kubelet's image GC at 85% disk, deleting
     exactly the images there is no registry to re-pull. Prune runs before copy; an image still
     held by a container stays on the list for next boot; failures are logged, never fatal.
+- `kiosk/Containerfile` — **written, built by nothing yet, unverified on hardware.** Firefox on
+  the DisplayPort output with **no GPU anywhere**: the GPU is Triton's, and the screen runs
+  outside Kubernetes where the device plugin cannot count it.
+  - Packages (`--setopt=install_weak_deps=False`): `firefox gnome-kiosk mesa-dri-drivers
+    dejavu-sans-fonts xorg-x11-server-Xorg xorg-x11-drv-libinput xorg-x11-xinit`. DejaVu covers
+    Latin and Hebrew; the frontend bundles anything else. Availability on aarch64 was not
+    checked (the RHEL-clone mirrors are blocked from the dev container); the build will say.
+  - **Xorg, not Wayland.** `modesetting` with `AccelMethod none` (`kiosk/xorg.conf`, in
+    `/usr/share/X11/xorg.conf.d`): any KMS driver with dumb buffers, never NVIDIA's DDX, and its
+    GLX can then only offer Mesa's software renderer, the path GNOME uses in VMs. GNOME Kiosk on
+    Wayland on the CPU needs Mesa's `kms_swrast` on nvidia-drm under mutter 40: untried, kept
+    as the fallback. `DontVTSwitch`: no Ctrl-Alt-Fn.
+  - **GNOME Kiosk is the window manager** (`gnome-kiosk --x11`), not a session: without a WM,
+    GTK's fullscreen request reaches nobody and Firefox opens windowed, and nothing turns on a
+    monitor plugged in after X started. It is the only WM RHEL ships for this. GL pinned to
+    Mesa in `session.sh` (`__GLX_VENDOR_LIBRARY_NAME=mesa`, the Mesa EGL vendor file,
+    `LIBGL_ALWAYS_SOFTWARE=1`) in case the base carries NVIDIA's GL.
+  - No GDM. `jetson-kiosk.service`: `User=kiosk` (from `sysusers.d`, not `useradd`: `/etc/passwd`
+    goes through bootc's `/etc` merge), `PAMName=login` on `TTYPath=/dev/tty1`, `Conflicts=
+    getty@tty1`; logind then grants the session the seat's DRM and input devices, so X runs
+    rootless. `Restart=always`, `StartLimitIntervalSec=0`. **The screen loses under CPU
+    contention**: `CPUWeight=20`, `CPUQuota=300%`, `MemoryMax=2G` (sizes are guesses).
+  - `kiosk.sh` waits for any DRM connector `connected` (sysfs, every 2 s), then for `KIOSK_URL`
+    to answer anything but a 5xx (`curl -k`: reachability only; MicroShift takes minutes), then
+    `exec xinit session.sh -- /usr/bin/Xorg :0 vt$XDG_VTNR -keeptty -nolisten tcp -s 0 -dpms`.
+    `session.sh` starts GNOME Kiosk, then `exec firefox --kiosk --no-remote` on a fresh profile
+    in `XDG_RUNTIME_DIR`. 10 s without a monitor, or GNOME Kiosk dying, kills Firefox (it holds
+    the script's PID through `exec`), which ends X; systemd starts over. So an unplugged port
+    runs nothing at all. The screen is black while waiting: no splash page, by choice.
+  - `/etc/jetson-kiosk.conf`: `KIOSK_URL`, a **placeholder** (`http://jetson-1.cloudlet.local/`)
+    until the frontend's Route host is known. HTTPS needs the signing CA in
+    `/etc/pki/ca-trust/source/anchors`: RHEL's Firefox reads the system trust via p11-kit.
+  - `/etc/firefox/policies/policies.json` (read before Firefox's `distribution/`): hardware
+    acceleration off and `gfx.webrender.software` locked; no updates, telemetry, studies,
+    safe-browsing or OpenH264 downloads; no disk cache; no crash-restore page; no devtools,
+    `about:config`, private windows. JSON has no comments, so the why is in the Containerfile.
+  - What the frontend must live with: **no H.264** (no decoder in RHEL's Firefox offline), no
+    CDN or web fonts, no reliance on WebGL, and reconnecting its own streams.
+  - Smoke test: unit enabled; unit `User=` is what `sysusers.d` creates; `xinit gnome-kiosk
+    firefox curl /usr/bin/Xorg` present and both scripts `bash -n`; the Mesa EGL vendor file,
+    `libGLX_mesa.so.0` and `swrast_dri.so` present; no `/etc/X11/xorg.conf` from below; the
+    policy parses with acceleration off. Locally the scripts were run against a fake DRM sysfs,
+    stub binaries and an HTTP server answering 503 then 200: plug, wait, start, unplug → exit.
 - `microshift/Containerfile` — MicroShift 4.20 from `rhocp-4.20-for-rhel-9-aarch64-rpms` +
   `fast-datapath-for-rhel-9-aarch64-rpms` (`firewalld jq microshift microshift-release-info
   openshift-clients`; `oc` is in `openshift-clients`), firewall rules (trusted: `10.42.0.0/16`,
@@ -285,7 +335,7 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   overlay, write the pull secret, build, run the smoke test inside the result, push
   `ghcr.io/<owner>/jetson-orin-bootc-<name>`, output the digest-pinned ref, and report the
   layer size as a `::notice`. Tags: `<YYYYMMDD-sha8>`, `latest`, and `extra-tags` (`stable`
-  on all four layers; `4.20` on the two with MicroShift, passed from the same lines as
+  on all five layers; `4.20` on the two with MicroShift, passed from the same lines as
   `USHIFT_VER` so the tag cannot lie). Tags are validated before the build.
   **What a node follows is not settled.** bib installs the services layer pinned by digest
   from GHCR, so `bootc upgrade` has nothing to re-resolve and could not reach it anyway.
@@ -305,8 +355,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   the `*.iso` alone (no checksum file) at zip `compression-level: 9`, the maintainer's call; it is
   mostly gzip'd layers and squashfs, so the saving is small and the upload slower.
 - `.github/workflows/build-microshift.yml` — the only caller, on push to `main` under
-  `base/**`, `microshift/**`, `services/**` or the workflows, and on `workflow_dispatch`.
-  **Nothing runs on a pull request.**
+  `base/**`, `kiosk/**`, `microshift/**`, `services/**` or the workflows, and on
+  `workflow_dispatch`. **Nothing runs on a pull request.**
 
 **Secrets**: `RH_REGISTRY_USER`/`RH_REGISTRY_PASSWORD` (bib pull), `RHSM_USERNAME`/`RHSM_PASSWORD`
 (every job registers, and unregisters in `if: always()`), `OPENSHIFT_PULL_SECRET` (build-time
@@ -345,9 +395,16 @@ hardware.
    /dev/nvhost-ctrl-gpu /dev/nvmap`; if `root:video 0660`, add `supplementalGroups` on the
    InferenceService or CRI-O's `device_ownership_from_security_context`). Then `oci://` with an
    embedded modelcar image, proving the `uidModelcar` change.
-6. k3s: revive only by writing `build-k3s.yml`, then check it runs enforcing, images staged
+6. Kiosk, with a monitor on DP: `lsmod | grep -E 'nvidia_drm|nvidia_modeset'` and
+   `/dev/dri/card*` (no display driver = nothing shows; adding NVIDIA's display package is a
+   maintainer decision); `cat /sys/class/drm/card*-*/status` flips with the cable;
+   `journalctl -u jetson-kiosk` walks monitor → URL → X; `ausearch -m avc` clean; `tegrastats`
+   shows `GR3D_FREQ` 0% with video playing; the session's CPU/RAM with the busiest screen; and
+   Triton's p99 latency with the screen on and off. If X picks the wrong card, `Option
+   "kmsdev"`. If the frontend plays H.264, it is a black box.
+7. k3s: revive only by writing `build-k3s.yml`, then check it runs enforcing, images staged
    first, the airgap set present with no registry, and a GPU pod on the default runtime.
-7. Later layers `FROM` the k8s image: a `bootc switch` unit for the air-gapped registry,
+8. Later layers `FROM` the k8s image: a `bootc switch` unit for the air-gapped registry,
    greenboot health checks, a signature policy in `/etc/containers/policy.json`.
 
 **Open decisions** (confirm with the maintainer first): the Triton `-igpu` tag for JetPack
@@ -357,7 +414,11 @@ registration vs. a self-hosted runner; per-device address and hostname before a 
 opening the k3s kubeconfig to `cloudlet`; whether k3s comes back, and how service images would
 reach containerd without doubling `/usr`; `bootc switch` vs. retag for the node's origin, and
 whether `stable` moves on every green build or only after a hardware boot; whether the
-`services/` resource sizes survive hardware (the ratios are enforced, the sizes are guesses).
+`services/` resource sizes survive hardware (the ratios are enforced, the sizes are guesses);
+the kiosk's `KIOSK_URL`, its CPU/RAM caps, reserving them from the kubelet (`systemReserved`;
+confirm MicroShift 4.20 accepts kubelet settings before relying on it), pinning the screen to
+1080p (a 4K monitor quadruples the CPU cost; mutter picks the monitor's preferred mode), and
+the frontend's video codec and preview size.
 
 ## How to work in this repo
 
@@ -436,9 +497,11 @@ cd /opt/nvidia/Linux_for_Tegra && sudo ./flash.sh p3737-0000-p3701-0000-qspi ext
 sudo podman build -f base/Containerfile.base     -t localhost/jetson-base:dev .
 sudo podman build -f base/Containerfile.podman   -t localhost/jetson-podman:dev \
     --build-arg BASE_IMAGE=localhost/jetson-base:dev .
+sudo podman build -f kiosk/Containerfile         -t localhost/jetson-kiosk:dev \
+    --build-arg BASE_IMAGE=localhost/jetson-podman:dev .
 sudo podman build -f microshift/Containerfile    -t localhost/jetson-microshift:dev \
     --secret id=pullsecret,src=$HOME/pull-secret.json \
-    --build-arg BASE_IMAGE=localhost/jetson-podman:dev .
+    --build-arg BASE_IMAGE=localhost/jetson-kiosk:dev .
 sudo podman build -f services/Containerfile      -t localhost/jetson-orin-bootc:dev \
     --secret id=pullsecret,src=$HOME/pull-secret.json \
     --build-arg BASE_IMAGE=localhost/jetson-microshift:dev .
