@@ -1,0 +1,19 @@
+#!/bin/bash
+# Run by GNOME Kiosk's script session as ~/.local/bin/gnome-kiosk-script.
+# Opens the frontend in Firefox, and opens it again whenever Firefox exits.
+set -euo pipefail
+
+# shellcheck source=jetson-kiosk.conf
+source /etc/jetson-kiosk.conf
+
+# MicroShift takes minutes after boot, and Firefox would sit on an error page
+# with nobody to reload it. Any answer but a 5xx (the router with no backend
+# yet) will do; -k because this only asks whether something answers.
+until code=$(curl -ks -o /dev/null -w '%{http_code}' --max-time 5 "$KIOSK_URL") \
+		&& [[ $code != 5* ]]; do
+	sleep 5
+done
+
+firefox --kiosk "$KIOSK_URL" || true
+sleep 1
+exec "$0" "$@"

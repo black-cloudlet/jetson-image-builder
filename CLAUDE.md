@@ -23,10 +23,9 @@ reaches the internet.
   `ClusterServingRuntime`, from `services/`. Still to come: PostgreSQL, RabbitMQ, the first
   `InferenceService`
 - Every container image physically bound into the OS image (zero network at first boot)
-- A kiosk: plugging a monitor into the Jetson's DisplayPort opens the frontend in Firefox
-  fullscreen, drawn on the **GPU it shares with Triton** (maintainer's call: live video on the
-  CPU costs cores the pods need). It must be on the Jetson itself (maintainer's requirement; a
-  separate display box was offered and declined)
+- A kiosk: a monitor on the Jetson's DisplayPort shows the frontend in Firefox, fullscreen. It
+  must be on the Jetson itself (maintainer's requirement; a separate display box was offered and
+  declined), and it stays Red Hat's documented setup, nothing custom (maintainer's call)
 
 **Model serving is upstream KServe, not Red Hat's**: `microshift-ai-model-serving` is x86_64
 only. KServe was removed once before (`bba9d10`, reason unrecorded).
@@ -107,9 +106,10 @@ only. KServe was removed once before (`bba9d10`, reason unrecorded).
    - `base/Containerfile.podman` adds the physically-bound-images machinery and `jtop`.
      Published as `jetson-orin-bootc-bound-images` from CI job `bound_images` (an underscore:
      `needs.bound-images` parses as a subtraction and resolves to nothing).
-   - `kiosk/` adds GNOME Kiosk, Firefox and `jetson-kiosk.service`. Shared, below the
-     variant: nothing in it is about the cluster, so a service change never reinstalls it; a
-     kiosk change does re-run MicroShift's install and image pulls (accepted: it changes rarely).
+   - `kiosk/` adds GDM, GNOME Kiosk's script session, Firefox and the `kiosk` user. Shared,
+     below the variant: nothing in it is about the cluster, so a service change never reinstalls
+     it; a kiosk change does re-run MicroShift's install and image pulls (accepted: it changes
+     rarely).
    - `microshift/` adds MicroShift, the device plugin and their images.
    - `services/` holds what runs on the cluster, one numbered kustomize root per component,
      with every image they name embedded.
@@ -169,60 +169,39 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     Otherwise the first thing to prune would be kubelet's image GC at 85% disk, deleting
     exactly the images there is no registry to re-pull. Prune runs before copy; an image still
     held by a container stays on the list for next boot; failures are logged, never fatal.
-- `kiosk/Containerfile` — **written, built by nothing yet, unverified on hardware.** Firefox on
-  the DisplayPort output, **drawn on the GPU**, shared with Triton unmetered: the screen runs
-  outside Kubernetes, where the device plugin's time slices cannot count it.
-  - Packages (`--setopt=install_weak_deps=False`): `firefox gnome-kiosk dejavu-sans-fonts`.
-    DejaVu covers Latin and Hebrew; the frontend bundles anything else. Availability on aarch64
-    was not checked (the RHEL-clone mirrors are blocked from the dev container); the build will
-    say.
-  - **GNOME Kiosk is the Wayland compositor**, straight on KMS: `gnome-kiosk --wayland
-    --display-server --no-x11` (no Xwayland; Firefox is a native Wayland client). It reaches the
-    GPU through NVIDIA's EGL (glvnd vendor file) and GBM; nothing pins a vendor. The smoke test
-    **fails the layer** if the image has no EGL vendor file naming `libEGL_nvidia` or no
-    `*nvidia*gbm*` library under `/usr/lib64`: without them there is no GPU path. Whether mutter
-    40 runs on NVIDIA's GBM at all is a hardware question.
-  - Firefox: hardware acceleration at its default (on), nothing forced. Its blocklist may still
-    pick software WebRender on the Tegra driver; `about:support` shows which, and
-    `gfx.webrender.all` in the policy would force it. Video decoding is on the CPU regardless
-    (no VA-API on Jetson).
-  - **Rejected, CPU-only path** (commit `9ba1b12` on this branch's history): Xorg `modesetting`
-    with `AccelMethod none`, GNOME Kiosk as an X11 window manager on Mesa's software GL, Firefox
-    on software WebRender. Zero GPU, but live video would cost the pods 2–3 cores. No window
-    manager at all was never an option: GTK's fullscreen request reaches nobody and Firefox
-    opens windowed. GNOME Kiosk is the only one RHEL ships; Openbox/Matchbox are EPEL.
-  - No GDM. `jetson-kiosk.service`: `User=kiosk` (from `sysusers.d`, not `useradd`: `/etc/passwd`
-    goes through bootc's `/etc` merge), `PAMName=login` on `TTYPath=/dev/tty1`, `Conflicts=
-    getty@tty1`; logind then grants the session the seat's DRM and input devices, so the
-    compositor runs rootless. `Restart=always`, `StartLimitIntervalSec=0`. **The screen loses
-    under CPU contention**: `CPUWeight=20`, `CPUQuota=300%`, `MemoryMax=2G` (sizes are guesses;
-    GPU allocations through nvmap are probably not charged to the cgroup). GPU time has no cap.
-  - `kiosk.sh` waits for any DRM connector `connected` (sysfs, every 2 s), then for `KIOSK_URL`
-    to answer anything but a 5xx (`curl -k`: reachability only; MicroShift takes minutes), then
-    starts the compositor, waits up to 30 s for `$XDG_RUNTIME_DIR/wayland-0` (a fresh runtime
-    dir per session, and a dead compositor's lock is not held, so the name is always free), and
-    `exec firefox --kiosk --no-remote` on a fresh profile in `XDG_RUNTIME_DIR`. 10 s without a
-    monitor, or GNOME Kiosk dying, kills Firefox (it holds the script's PID through `exec`), the
-    service ends and systemd kills the compositor with the cgroup, then starts over. So an
-    unplugged port runs nothing at all. The screen is black while waiting: no splash, by choice.
-  - Ctrl-Alt-Fn: on Wayland the VT switch is mutter's `switch-to-session-N` bindings, emptied in
-    `/usr/share/glib-2.0/schemas/90-jetson-kiosk.gschema.override` (compiled in the layer).
+- `kiosk/Containerfile` — **written, built by nothing yet, unverified on hardware.** Red Hat's
+  documented kiosk, kept deliberately plain: `dnf install gdm gnome-kiosk-script-session firefox
+  dejavu-sans-fonts` (DejaVu covers Hebrew), `systemctl enable gdm`, `set-default
+  graphical.target`. GDM autologins `kiosk` (`/etc/gdm/custom.conf`); the user is `sysusers.d`
+  (UID 1500: a regular user like any GDM login, above `cloudlet`; password locked; a shell,
+  because GDM starts the session through it). `tmpfiles.d` creates its home, links
+  `~/.local/bin/gnome-kiosk-script` (what `gnome-kiosk-script` execs) to
+  `/usr/libexec/jetson-kiosk/gnome-kiosk-script`, and writes
+  `/var/lib/AccountsService/users/kiosk` with `Session=gnome-kiosk-script-wayland`: all `/var`,
+  which the image does not deploy. The script sources `/etc/jetson-kiosk.conf`, waits until
+  `KIOSK_URL` answers anything but a 5xx (`curl -k`, reachability only), runs `firefox --kiosk`,
+  sleeps 1 s and re-execs itself (the template's own restart loop). Rendering is the defaults:
+  GPU where the drivers allow, unmetered against Triton.
   - `/etc/jetson-kiosk.conf`: `KIOSK_URL`, a **placeholder** (`http://jetson-1.cloudlet.local/`)
     until the frontend's Route host is known. HTTPS needs the signing CA in
     `/etc/pki/ca-trust/source/anchors`: RHEL's Firefox reads the system trust via p11-kit.
-  - `/etc/firefox/policies/policies.json` (read before Firefox's `distribution/`): no updates,
-    telemetry, studies, safe-browsing or OpenH264 downloads; no disk cache; no crash-restore
-    page; no devtools, `about:config`, private windows. JSON has no comments, so the why is in
-    the Containerfile.
+  - `/etc/firefox/policies/policies.json`: no updates, telemetry, studies, safe-browsing or
+    OpenH264 downloads; no disk cache; no crash-restore page; no devtools, `about:config`,
+    private windows. JSON has no comments, so the why is in the Containerfile.
   - What the frontend must live with: **no H.264** (no decoder in RHEL's Firefox offline), no
     CDN or web fonts, and reconnecting its own streams.
-  - Smoke test: unit enabled; unit `User=` is what `sysusers.d` creates; `gnome-kiosk firefox
-    curl` present and `kiosk.sh` parses; NVIDIA EGL and GBM present; the VT-switch override
-    applied (`GSETTINGS_BACKEND=memory gsettings get`: an override naming an unknown key only
-    warns at compile time); the policy parses. Locally `kiosk.sh` was run against a fake DRM
-    sysfs, a stub compositor opening a real socket, a stub Firefox and an HTTP server answering
-    503 then 200: plug, wait, start, unplug → exit; compositor dies → exit; no socket in 30 s →
-    exit 1 with a listing.
+  - **Tried and dropped as too complicated** (branch history): a custom `jetson-kiosk.service`
+    on tty1 instead of GDM, starting only while a monitor is connected and stopping 10 s after
+    unplug, with CPU/memory caps; a CPU-only variant (Xorg `modesetting`, no acceleration,
+    `9ba1b12`); a GPU variant with GNOME Kiosk as a bare Wayland compositor and a smoke test
+    requiring NVIDIA's EGL/GBM (`a4607a1`). Go back to one only for a measured reason.
+  - Smoke test: default target `graphical.target` and `display-manager.service` → gdm; then it
+    runs `systemd-sysusers` and `systemd-tmpfiles --create` in the throwaway test container, as
+    a boot would, and checks GDM's autologin user exists, the AccountsService session names an
+    installed `wayland-sessions` file, the linked script is executable and parses,
+    `gnome-kiosk-script` still execs `~/.local/bin/gnome-kiosk-script`, and the policy parses.
+    Locally: sysusers/tmpfiles run against a scratch root (escapes expand, link lands), and the
+    script against a stub Firefox and a server answering 503 twice: waits, opens, reopens.
 - `microshift/Containerfile` — MicroShift 4.20 from `rhocp-4.20-for-rhel-9-aarch64-rpms` +
   `fast-datapath-for-rhel-9-aarch64-rpms` (`firewalld jq microshift microshift-release-info
   openshift-clients`; `oc` is in `openshift-clients`), firewall rules (trusted: `10.42.0.0/16`,
@@ -409,12 +388,10 @@ hardware.
    embedded modelcar image, proving the `uidModelcar` change.
 6. Kiosk, with a monitor on DP: `lsmod | grep -E 'nvidia_drm|nvidia_modeset'` and
    `/dev/dri/card*` (no display driver = nothing shows; adding NVIDIA's display package is a
-   maintainer decision); `cat /sys/class/drm/card*-*/status` flips with the cable;
-   `journalctl -u jetson-kiosk` walks monitor → URL → compositor; `ausearch -m avc` clean;
-   Firefox's `about:support` says hardware WebRender; `tegrastats` `GR3D_FREQ` with the busiest
-   screen and the model idle (the screen's share of the GPU); the session's CPU/RAM; and
-   Triton's p99 latency with the screen on and off. If the frontend plays H.264, it is a black
-   box. If mutter will not start on NVIDIA's GBM, the CPU-only path in `9ba1b12` is the fallback.
+   maintainer decision); GDM logs `kiosk` in and Firefox opens on the URL; replug the cable and
+   the picture returns; the screen does not blank; `ausearch -m avc` clean; `about:support` for
+   what Firefox draws with; `tegrastats` and Triton's p99 latency with the screen on and off.
+   If the frontend plays H.264, it is a black box.
 7. k3s: revive only by writing `build-k3s.yml`, then check it runs enforcing, images staged
    first, the airgap set present with no registry, and a GPU pod on the default runtime.
 8. Later layers `FROM` the k8s image: a `bootc switch` unit for the air-gapped registry,
@@ -427,11 +404,8 @@ self-hosted runner; per-device address and hostname before a second node; openin
 kubeconfig to `cloudlet`; whether k3s comes back, and how service images would reach containerd
 without doubling `/usr`; `bootc switch` vs. retag for the node's origin, and whether `stable` moves
 on every green build or only after a hardware boot; whether the `services/` resource sizes survive
-hardware (the ratios are enforced, the sizes are guesses); the kiosk's `KIOSK_URL`, its GPU share
-against Triton's latency, its CPU/RAM caps, reserving them from the kubelet (`systemReserved`;
-confirm MicroShift 4.20 accepts kubelet settings before relying on it), pinning the screen to 1080p
-(a 4K monitor quadruples the drawing cost; mutter picks the monitor's preferred mode), and the
-frontend's video codec and preview size.
+hardware (the ratios are enforced, the sizes are guesses); the kiosk's `KIOSK_URL`, what the screen
+costs Triton once measured, and the frontend's video codec and preview size.
 
 ## How to work in this repo
 

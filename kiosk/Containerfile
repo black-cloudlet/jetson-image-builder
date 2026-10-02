@@ -1,49 +1,34 @@
-# Layer 3, shared: Firefox fullscreen on the DisplayPort output, started when a
-# monitor is plugged in and stopped when it is unplugged. Below the Kubernetes
-# variant, because nothing here is about the cluster: an app or service change
-# never re-runs this install.
-#
-# Drawn on the GPU: GNOME Kiosk is the Wayland compositor, straight on KMS
-# through NVIDIA's EGL and GBM, and Firefox renders with hardware WebRender.
-# The maintainer's call: live video drawn on the CPU costs cores the pods need.
-# The GPU is Triton's too, and this runs outside Kubernetes, where the device
-# plugin's time slices cannot count it.
+# Layer 3, shared: the frontend in Firefox, fullscreen on the DisplayPort
+# output. Red Hat's documented kiosk setup: GDM logs the kiosk user in, GNOME
+# Kiosk's script session starts, and the script opens Firefox. Below the
+# Kubernetes variant, because nothing here is about the cluster.
 ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-bound-images:latest
 FROM ${BASE_IMAGE}
 
-# No Xorg: the compositor owns the display, and Firefox is a native Wayland
-# client. DejaVu Sans covers Latin and Hebrew; the frontend must bundle any
-# other font it wants. No weak deps: they are most of a desktop.
-RUN dnf install -y --setopt=install_weak_deps=False \
-        firefox gnome-kiosk dejavu-sans-fonts && \
+# DejaVu Sans covers Latin and Hebrew; the frontend must bundle any other font.
+RUN dnf install -y gdm gnome-kiosk-script-session firefox dejavu-sans-fonts && \
+    systemctl enable gdm && \
+    systemctl set-default graphical.target && \
     dnf clean all
 
-# The account the session runs as: no password, no shell, not in wheel.
+# The kiosk user, its home, the script the session runs from that home, and
+# the session GDM starts for it. sysusers and tmpfiles rather than useradd and
+# files in /var: /etc/passwd goes through bootc's /etc merge, and /var in the
+# image is not deployed.
 COPY kiosk/sysusers.conf /usr/lib/sysusers.d/jetson-kiosk.conf
+COPY kiosk/tmpfiles.conf /usr/lib/tmpfiles.d/jetson-kiosk.conf
+COPY --chmod=0555 kiosk/gnome-kiosk-script /usr/libexec/jetson-kiosk/gnome-kiosk-script
 
-# No Ctrl-Alt-Fn: the other VTs hold a login prompt and nothing a kiosk user
-# needs; administration is over SSH. On Wayland the VT switch is a mutter key
-# binding, so it is emptied in the schema defaults.
-COPY kiosk/jetson-kiosk.gschema.override \
-      /usr/share/glib-2.0/schemas/90-jetson-kiosk.gschema.override
-RUN glib-compile-schemas /usr/share/glib-2.0/schemas
+# Log the kiosk user in at boot, with no login screen.
+COPY kiosk/gdm-custom.conf /etc/gdm/custom.conf
 
-# JSON takes no comments, so the why is here. Disk cache off, with kiosk.sh's
-# fresh profile on tmpfs: no eMMC writes. Updates, telemetry, studies, safe
-# browsing and the OpenH264 download: all would try the internet. No crash
-# restore: a restarted session opens the URL, not an offer to restore the last
-# one. The rest keeps a kiosk user from anything but the page. Hardware
-# acceleration is left at Firefox's default (on); whether its blocklist allows
-# the Tegra driver shows in about:support on the device. /etc/firefox/policies
-# is read before the copy in Firefox's own directory.
+# JSON takes no comments, so the why is here: no updates, telemetry, studies,
+# safe browsing or OpenH264 download (all would try the internet), no disk
+# cache (eMMC writes), no crash-restore page, and nothing a kiosk user could
+# escape the page with.
 COPY kiosk/policies.json /etc/firefox/policies/policies.json
 
 # /etc, so one device can point somewhere else without a rebuild.
 COPY kiosk/jetson-kiosk.conf /etc/jetson-kiosk.conf
-
-COPY --chmod=0555 kiosk/kiosk.sh /opt/jetson-kiosk/kiosk.sh
-COPY --chmod=0644 kiosk/jetson-kiosk.service \
-      /usr/lib/systemd/system/jetson-kiosk.service
-RUN systemctl enable jetson-kiosk.service
 
 RUN bootc container lint
