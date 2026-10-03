@@ -33,4 +33,21 @@ if ! command -v jtop; then
 	exit 1
 fi
 
+echo "== edge manager agent =="
+rpm -qa 'flightctl*' | sort
+if [[ ! -L $wants/flightctl-agent.service ]]; then
+	echo "not enabled: flightctl-agent.service"
+	ls -la "$wants" | sed 's/^/   /'
+	exit 1
+fi
+
+# A drop-in for a missing unit is silently ignored.
+for unit in flightctl-agent.service bootc-fetch-apply-updates.service; do
+	if [[ ! -f /usr/lib/systemd/system/$unit ]]; then
+		echo "drop-in target missing: /usr/lib/systemd/system/$unit"
+		ls /usr/lib/systemd/system | grep -E 'flightctl|bootc' | sed 's/^/   /'
+		exit 1
+	fi
+done
+
 echo "all checks passed"
