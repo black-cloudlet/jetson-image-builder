@@ -11,7 +11,7 @@ ARG USHIFT_VER=4.20
 RUN dnf install -y \
         --enablerepo="rhocp-${USHIFT_VER}-for-rhel-9-$(uname -m)-rpms" \
         --enablerepo="fast-datapath-for-rhel-9-$(uname -m)-rpms" \
-        firewalld jq microshift microshift-release-info openshift-clients && \
+        dnsmasq firewalld jq microshift microshift-release-info openshift-clients && \
     systemctl enable microshift && \
     dnf clean all
 
@@ -24,10 +24,21 @@ RUN firewall-offline-cmd --zone=trusted --add-source=10.42.0.0/16 && \
     firewall-offline-cmd --zone=public --add-port=443/tcp && \
     firewall-offline-cmd --zone=public --add-port=6443/tcp
 
-# Installs the lo connection (0600, root-only) and MicroShift's nodeIP drop-in.
+# Installs the lo connection (0600, root-only) and MicroShift's drop-ins.
 COPY --chmod=0600 microshift/stable-microshift.nmconnection \
       /usr/lib/NetworkManager/system-connections/stable-microshift.nmconnection
 COPY microshift/config.d/ /etc/microshift/config.d/
+
+# Split DNS: cluster.local to CoreDNS (10.43.0.10, the 10th address of
+# serviceNetwork), the rest as before. Kubelet half: 30-kubelet-resolv-conf.yaml.
+COPY <<'EOF' /usr/lib/NetworkManager/conf.d/50-dnsmasq.conf
+[main]
+dns=dnsmasq
+EOF
+
+COPY <<'EOF' /etc/NetworkManager/dnsmasq.d/cluster-local.conf
+server=/cluster.local/10.43.0.10
+EOF
 
 # OVN needs the root subtree shared; on bare metal systemd has already done it.
 COPY <<'EOF' /usr/lib/systemd/system/microshift-make-rshared.service
