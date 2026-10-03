@@ -1,19 +1,56 @@
 #!/bin/bash
 # Run by GNOME Kiosk's script session as ~/.local/bin/gnome-kiosk-script.
-# Opens the frontend in Firefox, and opens it again whenever Firefox exits.
+# Opens the frontend in Firefox while a monitor is connected, closes it when
+# the monitor goes, and opens it again whenever it exits.
 set -euo pipefail
 
 # shellcheck source=jetson-kiosk.conf
 source /etc/jetson-kiosk.conf
 
-# MicroShift takes minutes after boot, and Firefox would sit on an error page
-# with nobody to reload it. Any answer but a 5xx (the router with no backend
-# yet) will do; -k because this only asks whether something answers.
-until code=$(curl -ks -o /dev/null -w '%{http_code}' --max-time 5 "$KIOSK_URL") \
-		&& [[ $code != 5* ]]; do
-	sleep 5
-done
+# Any connector rather than DP by name: the names come from the display
+# driver, unverified on this one. The status file is the driver's last hotplug
+# state, so reading it every two seconds costs nothing.
+connected() { grep -qx connected /sys/class/drm/card*-*/status 2>/dev/null; }
 
-firefox --kiosk "$KIOSK_URL" || true
-sleep 1
-exec "$0" "$@"
+delay=1
+while true; do
+	# With no monitor, no Firefox decoding video for nobody.
+	until connected; do sleep 2; done
+
+	# MicroShift takes minutes after boot, and Firefox would sit on an error
+	# page with nobody to reload it. Any answer but a 5xx (the router with no
+	# backend yet) will do; -k because this only asks whether something answers.
+	until code=$(curl -ks -o /dev/null -w '%{http_code}' --max-time 5 "$KIOSK_URL") \
+			&& [[ $code != 5* ]]; do
+		sleep 5
+	done
+
+	started=$SECONDS
+	firefox --kiosk "$KIOSK_URL" &
+	firefox=$!
+
+	# Ten seconds without a monitor closes Firefox. Ten rather than one poll:
+	# a cable wiggle should not cost a Firefox start.
+	unplugged=false gone=0
+	while kill -0 "$firefox" 2>/dev/null; do
+		sleep 2
+		if connected; then gone=0; else gone=$((gone + 1)); fi
+		if ((gone >= 5)); then
+			unplugged=true
+			kill "$firefox" 2>/dev/null || true
+			break
+		fi
+	done
+	wait "$firefox" || true
+
+	# A Firefox that dies within a minute is crashing, not being closed: wait
+	# twice as long each time, up to a minute, instead of restarting every
+	# second. A run that lasted, or an unplug, starts the count over.
+	if [[ $unplugged == false ]] && ((SECONDS - started < 60)); then
+		delay=$((delay * 2 > 60 ? 60 : delay * 2))
+		echo "Firefox exited after $((SECONDS - started)) s; next start in ${delay} s"
+	else
+		delay=1
+	fi
+	sleep "$delay"
+done

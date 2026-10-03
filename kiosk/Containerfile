@@ -24,8 +24,9 @@ COPY kiosk/gdm-custom.conf /etc/gdm/custom.conf
 
 # JSON takes no comments, so the why is here: no updates, telemetry, studies,
 # safe browsing or OpenH264 download (all would try the internet), no disk
-# cache (eMMC writes), no crash-restore page, and nothing a kiosk user could
-# escape the page with.
+# cache (eMMC writes), no crash-restore page, no file:// pages (a file picker
+# would otherwise browse the disk), and nothing a kiosk user could escape the
+# page with.
 COPY kiosk/policies.json /etc/firefox/policies/policies.json
 
 # /etc, so one device can point somewhere else without a rebuild.

@@ -167,9 +167,14 @@ Red Hat's documented kiosk setup, nothing more:
 3. The session is **GNOME Kiosk's script session** (`gnome-kiosk-script-wayland`, set in the
    user's AccountsService file). GNOME Kiosk is the compositor; it makes every window fullscreen
    and lights a monitor whenever one is plugged in.
-4. That session runs `~/.local/bin/gnome-kiosk-script`, a link to our script. It waits until
-   `KIOSK_URL` answers with anything but a 5xx (MicroShift needs minutes after boot), runs
-   `firefox --kiosk`, and runs it again a second after it exits.
+4. That session runs `~/.local/bin/gnome-kiosk-script`, a link to our script, in a loop:
+   - it waits until a DRM connector reports `connected`, so with no monitor nothing decodes
+     video for nobody;
+   - it waits until `KIOSK_URL` answers with anything but a 5xx (MicroShift needs minutes after
+     boot);
+   - it runs `firefox --kiosk`, and closes it after 10 s without a monitor;
+   - when Firefox exits, it starts it again after 1 s. A Firefox that keeps dying within a
+     minute waits 2, 4, 8… up to 60 s instead, so a crash loop does not eat a core.
 
 The kiosk user's home and the AccountsService file are in `/var`, so they come from
 `tmpfiles.d`, created at boot; anything put in `/var` at build time is not deployed.
@@ -184,7 +189,8 @@ It runs outside Kubernetes, so the device plugin does not count it.
   `/etc/hosts` line.
 - `/etc/firefox/policies/policies.json`: no updates, telemetry, studies or safe-browsing
   downloads (all would try the internet), no OpenH264 download, no disk cache, no crash-restore
-  page, no developer tools, `about:config` or private windows.
+  page, no `file://` pages (a file picker would otherwise browse the disk), no developer tools,
+  `about:config` or private windows.
 
 **What the frontend has to live with** on this screen: no H.264 video (RHEL's Firefox has no
 decoder for it, and the OpenH264 plugin is a download), nothing loaded from the internet, and
@@ -654,7 +660,7 @@ The design record, with every decision and why, is `CLAUDE.md`.
 | `base/physically-bound-images/copy_embedded_images.sh` | boot time: restore the cache, prune what an older OS left |
 | `base/physically-bound-images/copy-embedded-images.service` | runs it once per boot, before MicroShift |
 | `kiosk/Containerfile` | layer 3: GDM, GNOME Kiosk, Firefox |
-| `kiosk/gnome-kiosk-script` | waits for the URL, runs Firefox, runs it again when it exits |
+| `kiosk/gnome-kiosk-script` | waits for a monitor and the URL, runs Firefox, closes it on unplug, restarts it with back-off |
 | `kiosk/gdm-custom.conf` | GDM logs `kiosk` in automatically |
 | `kiosk/sysusers.conf`, `kiosk/tmpfiles.conf` | the `kiosk` user, its home and session |
 | `kiosk/jetson-kiosk.conf` | `KIOSK_URL` |

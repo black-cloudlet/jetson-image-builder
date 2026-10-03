@@ -178,30 +178,38 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `~/.local/bin/gnome-kiosk-script` (what `gnome-kiosk-script` execs) to
   `/usr/libexec/jetson-kiosk/gnome-kiosk-script`, and writes
   `/var/lib/AccountsService/users/kiosk` with `Session=gnome-kiosk-script-wayland`: all `/var`,
-  which the image does not deploy. The script sources `/etc/jetson-kiosk.conf`, waits until
-  `KIOSK_URL` answers anything but a 5xx (`curl -k`, reachability only), runs `firefox --kiosk`,
-  sleeps 1 s and re-execs itself (the template's own restart loop). Rendering is the defaults:
-  GPU where the drivers allow, unmetered against Triton.
+  which the image does not deploy. The script sources `/etc/jetson-kiosk.conf` and loops: wait
+  for any DRM connector `connected` (sysfs, every 2 s; no monitor, no Firefox decoding video),
+  wait until `KIOSK_URL` answers anything but a 5xx (`curl -k`, reachability only), run
+  `firefox --kiosk` in the background and kill it after 10 s without a monitor, then restart
+  after 1 s, or with back-off (2, 4 … 60 s) when Firefox died on its own within a minute. A
+  `while` loop rather than the template's `exec "$0"`, so the back-off survives a restart.
+  Rendering is the defaults: GPU where the drivers allow, unmetered against Triton.
   - `/etc/jetson-kiosk.conf`: `KIOSK_URL`, a **placeholder** (`http://jetson-1.cloudlet.local/`)
     until the frontend's Route host is known. HTTPS needs the signing CA in
     `/etc/pki/ca-trust/source/anchors`: RHEL's Firefox reads the system trust via p11-kit.
   - `/etc/firefox/policies/policies.json`: no updates, telemetry, studies, safe-browsing or
-    OpenH264 downloads; no disk cache; no crash-restore page; no devtools, `about:config`,
-    private windows. JSON has no comments, so the why is in the Containerfile.
+    OpenH264 downloads; no disk cache; no crash-restore page; `WebsiteFilter` blocks
+    `file:///*` (a file picker would otherwise browse the disk; uploads through
+    `<input type=file>` still work, which is the frontend's business); no devtools,
+    `about:config`, private windows. JSON has no comments, so the why is in the Containerfile.
   - What the frontend must live with: **no H.264** (no decoder in RHEL's Firefox offline), no
     CDN or web fonts, and reconnecting its own streams.
   - **Tried and dropped as too complicated** (branch history): a custom `jetson-kiosk.service`
-    on tty1 instead of GDM, starting only while a monitor is connected and stopping 10 s after
-    unplug, with CPU/memory caps; a CPU-only variant (Xorg `modesetting`, no acceleration,
-    `9ba1b12`); a GPU variant with GNOME Kiosk as a bare Wayland compositor and a smoke test
-    requiring NVIDIA's EGL/GBM (`a4607a1`). Go back to one only for a measured reason.
+    on tty1 instead of GDM, with CPU/memory caps; a GPU variant with GNOME Kiosk as a bare
+    Wayland compositor and a smoke test requiring NVIDIA's EGL/GBM (`a4607a1`). Go back to one
+    only for a measured reason. The CPU-only variant (Xorg `modesetting`, no acceleration,
+    custom service) is kept as branch `claude/kiosk-xorg-cpu` (`9ba1b12`): the fallback if GDM
+    refuses Wayland on NVIDIA or GNOME will not start on the Jetson's display stack.
   - Smoke test: default target `graphical.target` and `display-manager.service` → gdm; then it
     runs `systemd-sysusers` and `systemd-tmpfiles --create` in the throwaway test container, as
     a boot would, and checks GDM's autologin user exists, the AccountsService session names an
     installed `wayland-sessions` file, the linked script is executable and parses,
     `gnome-kiosk-script` still execs `~/.local/bin/gnome-kiosk-script`, and the policy parses.
     Locally: sysusers/tmpfiles run against a scratch root (escapes expand, link lands), and the
-    script against a stub Firefox and a server answering 503 twice: waits, opens, reopens.
+    script against a fake DRM sysfs, stub Firefoxes and a local server: no monitor → nothing;
+    plug → Firefox in 1 s; unplug → SIGTERM 10 s later; replug → back; a Firefox that exits at
+    once → restarts after 2, 4, 8, 16 s.
 - `microshift/Containerfile` — MicroShift 4.20 from `rhocp-4.20-for-rhel-9-aarch64-rpms` +
   `fast-datapath-for-rhel-9-aarch64-rpms` (`firewalld jq microshift microshift-release-info
   openshift-clients`; `oc` is in `openshift-clients`), firewall rules (trusted: `10.42.0.0/16`,

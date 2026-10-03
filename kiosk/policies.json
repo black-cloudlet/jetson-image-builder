@@ -22,6 +22,11 @@
     "DisableFormHistory": true,
     "CaptivePortal": false,
     "NetworkPrediction": false,
+    "WebsiteFilter": {
+      "Block": [
+        "file:///*"
+      ]
+    },
     "DNSOverHTTPS": {
       "Enabled": false,
       "Locked": true
