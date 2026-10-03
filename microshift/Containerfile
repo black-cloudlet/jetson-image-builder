@@ -6,12 +6,13 @@ FROM ${BASE_IMAGE}
 # Both repos are entitlement-gated; the build registers. No `dnf upgrade`: it
 # could pull a kernel the Tegra kmod cannot load against. --enablerepo rather
 # than config-manager, so dnf-plugins-core need not be in the base.
-# openshift-clients is `oc` — the microshift RPM ships no client.
+# openshift-clients is `oc` — the microshift RPM ships no client. dnsmasq is
+# NetworkManager's split-DNS backend, below.
 ARG USHIFT_VER=4.20
 RUN dnf install -y \
         --enablerepo="rhocp-${USHIFT_VER}-for-rhel-9-$(uname -m)-rpms" \
         --enablerepo="fast-datapath-for-rhel-9-$(uname -m)-rpms" \
-        firewalld jq microshift microshift-release-info openshift-clients && \
+        dnsmasq firewalld jq microshift microshift-release-info openshift-clients && \
     systemctl enable microshift && \
     dnf clean all
 
@@ -24,10 +25,25 @@ RUN firewall-offline-cmd --zone=trusted --add-source=10.42.0.0/16 && \
     firewall-offline-cmd --zone=public --add-port=443/tcp && \
     firewall-offline-cmd --zone=public --add-port=6443/tcp
 
-# Installs the lo connection (0600, root-only) and MicroShift's nodeIP drop-in.
+# Installs the lo connection (0600, root-only) and MicroShift's drop-ins: nodeIP
+# and the kubelet's resolv.conf.
 COPY --chmod=0600 microshift/stable-microshift.nmconnection \
       /usr/lib/NetworkManager/system-connections/stable-microshift.nmconnection
 COPY microshift/config.d/ /etc/microshift/config.d/
+
+# Split DNS: the node resolves *.cluster.local through CoreDNS, everything else
+# as before. NetworkManager runs dnsmasq on 127.0.0.1 and points
+# /etc/resolv.conf at it; dnsmasq.d adds the one route. 10.43.0.10 is the 10th
+# address of serviceNetwork, which MicroShift computes and no file names: change
+# the service CIDR, change this. The kubelet half is 30-kubelet-resolv-conf.yaml.
+COPY <<'EOF' /usr/lib/NetworkManager/conf.d/50-dnsmasq.conf
+[main]
+dns=dnsmasq
+EOF
+
+COPY <<'EOF' /etc/NetworkManager/dnsmasq.d/cluster-local.conf
+server=/cluster.local/10.43.0.10
+EOF
 
 # OVN needs the root subtree shared; on bare metal systemd has already done it.
 COPY <<'EOF' /usr/lib/systemd/system/microshift-make-rshared.service
