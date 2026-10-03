@@ -143,8 +143,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   - `jetson-stats` (`jtop`, pinned `JTOP_VER`) via `pip3 install --prefix=/usr` (`/usr/local`
     is machine state on bootc). `python3-pip` comes from RHEL repos, so this layer needs
     entitlement. Whether `jtop` reaches the driver as installed is unverified.
-  - `flightctl-agent` from `edge-manager-${RHEM_VER}-for-rhel-9-$(uname -m)-rpms`
-    (`RHEM_VER=1.2`, match the server), no weak deps (keeps greenboot out). Drop-ins key both
+  - `flightctl-agent` from `rhacm-${ACM_VER}-for-rhel-9-$(uname -m)-rpms`
+    (`ACM_VER=2.15`, match the hub), no weak deps (keeps greenboot out). Drop-ins key both
     the agent and `bootc-fetch-apply-updates.service` on `/etc/flightctl/config.yaml`: agent
     idle and bootc upgrading before enrollment, the reverse after. Unverified until dispatched.
   Its smoke test fails if this layer has an image cache: anything here is paid by every variant.
@@ -318,8 +318,7 @@ image pulls, never in the image), `JETSON_SSH_PUBKEY`, `JETSON_PASSWORD_HASH`
 (`openssl passwd -6`). Registration replaced an entitlement-cert tarball. Username/password is
 maintainer preference; an org ID + activation key is narrower and needed for SSO/2FA accounts.
 Credentials go through `env:`. With Simple Content Access off, register needs `--auto-attach`.
-The subscription needs OpenShift and Edge Manager entitlements, or `rhocp` and `edge-manager`
-never appear. A self-hosted registered RHEL 9 aarch64 runner would remove registration entirely.
+The subscription needs OpenShift and ACM entitlements, or `rhocp` and `rhacm` never appear. A self-hosted registered RHEL 9 aarch64 runner would remove registration entirely.
 
 **bib**: `registry.redhat.io/rhel9/bootc-image-builder` is the supported path for RHEL
 content; output is `output/bootiso/install.iso`. The installer boots the stock RHEL kernel, and

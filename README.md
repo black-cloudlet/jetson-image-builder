@@ -104,7 +104,7 @@ digest, and each is pushed to GHCR on its own as `ghcr.io/black-cloudlet/jetson-
 | Layer | Built from | Published as | Adds | Needs RHEL entitlement |
 |---|---|---|---|---|
 | base | `base/Containerfile.base` | `jetson-orin-bootc-base` | nothing: a pure republish of the vendor image | no (registers anyway, one code path) |
-| bound-images | `base/Containerfile.podman` | `jetson-orin-bootc-bound-images` | the scripts and boot unit that embed and restore container images; `jtop`; the Edge Manager agent | yes (`python3-pip`, `edge-manager` repo) |
+| bound-images | `base/Containerfile.podman` | `jetson-orin-bootc-bound-images` | the scripts and boot unit that embed and restore container images; `jtop`; the Edge Manager agent | yes (`python3-pip`, `rhacm` repo) |
 | microshift | `microshift/Containerfile` | `jetson-orin-bootc-microshift` | MicroShift, firewall, node networking, GPU device plugin, 9+ embedded images | yes (`rhocp` + `fast-datapath` repos) |
 | services | `services/Containerfile` | `jetson-orin-bootc-services` | four kustomize roots applied by MicroShift, 7 embedded images | no RPMs |
 
@@ -141,7 +141,7 @@ variant, not a variant of its own. Three things:
   [How a node runs with no registry](#how-a-node-runs-with-no-registry).
 - **`jtop`** (jetson-stats, pinned by `JTOP_VER`), installed with `pip3 install --prefix=/usr`:
   on bootc, `/usr/local` is per-machine state and would not ship in the image.
-- **Edge Manager agent** (`flightctl-agent`, `RHEM_VER=1.2`, no weak deps so no greenboot).
+- **Edge Manager agent** (`flightctl-agent` from ACM, `ACM_VER=2.15`, no weak deps so no greenboot).
   Enabled but idle until `/etc/flightctl/config.yaml` exists; while it does,
   `bootc-fetch-apply-updates.service` is skipped, since Edge Manager owns OS updates.
 
@@ -398,7 +398,8 @@ The services layer's images (`quay.io/jetstack`, `oci.external-secrets.io`, `doc
 Notes on registration:
 - **The subscription must include OpenShift**, or `rhocp-4.20-for-rhel-9-aarch64-rpms` never
   appears and the microshift build fails at `--enablerepo`.
-- **It must also include Edge Manager**, or the bound-images build fails at `--enablerepo`.
+- **It must also include ACM**, or `rhacm-2.15-for-rhel-9-aarch64-rpms` never appears and the
+  bound-images build fails at `--enablerepo`.
 - **With Simple Content Access off,** registering needs `--auto-attach`.
 - **A username and password is the broader credential.** An organisation ID plus activation key
   is narrower, and it is the only option for accounts with SSO or two-factor.
