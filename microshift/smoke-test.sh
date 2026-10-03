@@ -51,22 +51,12 @@ node=$(awk '$1 == "nodeIP:" { print $2 }' /etc/microshift/config.d/*.yaml)
 echo "   nodeIP $node is on lo"
 
 echo "== split dns =="
-# Two halves in separate files. With dns=dnsmasq and kubelet still reading
-# /etc/resolv.conf, CoreDNS forwards to 127.0.0.1 inside its own pod and nothing
-# outside cluster.local resolves in the cluster. With the kubelet path naming a
-# file NetworkManager does not write, kubelet cannot build any pod DNS config
-# and no pod starts. The effective NetworkManager config is read, not our file:
-# one of the same name in /etc/NetworkManager/conf.d replaces it.
+# dns=dnsmasq and the kubelet resolvConf are separate files; either alone breaks pod DNS.
 mode=$(NetworkManager --print-config | awk -F= '$1 == "dns" { print $2 }')
-[[ $mode == dnsmasq ]] \
-	|| fail "NetworkManager dns is '$mode', expected dnsmasq (NetworkManager --print-config)"
+[[ $mode == dnsmasq ]] || fail "NetworkManager dns is '$mode', expected dnsmasq"
 rc=$(awk '$1 == "resolvConf:" { print $2 }' /etc/microshift/config.d/*.yaml)
-[[ $rc == /run/NetworkManager/no-stub-resolv.conf ]] \
-	|| fail "kubelet resolvConf is '$rc' (/etc/microshift/config.d), expected" \
-	"/run/NetworkManager/no-stub-resolv.conf"
-grep -qaF "$rc" /usr/sbin/NetworkManager \
-	|| fail "/usr/sbin/NetworkManager no longer names $rc: kubelet would read a file nothing writes"
-echo "   cluster.local via dnsmasq, kubelet reads $rc"
+[[ $rc == /run/NetworkManager/no-stub-resolv.conf ]] && grep -qaF "$rc" /usr/sbin/NetworkManager \
+	|| fail "kubelet resolvConf '$rc' (/etc/microshift/config.d) is not a file NetworkManager writes"
 
 echo "== nvidia runtime for cri-o =="
 # nvidia-ctk renames a .conf drop-in to .toml and still exits 0, so only a check

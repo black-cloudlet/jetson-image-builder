@@ -281,19 +281,11 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `ignore-carrier` was rejected: it keeps MicroShift tied to `eth0`. A node initialised on
   `192.168.1.10` needs `microshift-cleanup-data --ovn` or a re-image. A clock step over 10 s
   (first chrony sync) can still cost one restart.
-- **Split DNS for `cluster.local`** — the node resolves `<svc>.<ns>.svc.cluster.local` (full
-  name: the node's search list is still `cloudlet.local` only) through CoreDNS, everything
-  else as before. `/usr/lib/NetworkManager/conf.d/50-dnsmasq.conf` sets `dns=dnsmasq`, so
-  `/etc/resolv.conf` says `127.0.0.1`; `/etc/NetworkManager/dnsmasq.d/cluster-local.conf`
-  routes `cluster.local` to `10.43.0.10` (the 10th address of `serviceNetwork`, computed by
-  MicroShift and named in no file). dnsmasq, not systemd-resolved: resolved is a Technology
-  Preview on RHEL 9, though MicroShift would have handled it by itself
-  (`pkg/node/kubelet.go`). The price is `microshift/config.d/30-kubelet-resolv-conf.yaml`:
-  kubelet hands its `resolvConf` to CoreDNS, and `127.0.0.1` there is the pod itself, so it
-  reads `/run/NetworkManager/no-stub-resolv.conf`, the real nameservers (`10.44.1.1`
-  included). The smoke test checks the effective NM `dns=`, the kubelet path, and that the
-  NM binary still names that path. Before MicroShift is up, only `cluster.local` lookups
-  wait. No reverse zones for `10.42`/`10.43`. Unverified on hardware.
+- **Split DNS** — NM's `dns=dnsmasq` plus `server=/cluster.local/10.43.0.10` (CoreDNS) lets
+  the node resolve full `<svc>.<ns>.svc.cluster.local` names. dnsmasq, not systemd-resolved
+  (Tech Preview on RHEL 9). `/etc/resolv.conf` becomes `127.0.0.1`, so
+  `config.d/30-kubelet-resolv-conf.yaml` points kubelet (and so CoreDNS's upstream) at
+  `/run/NetworkManager/no-stub-resolv.conf`. Unverified on hardware.
 - `.github/workflows/build-image.yml` — **reusable**: register, bind storage for native
   overlay, write the pull secret, build, run the smoke test inside the result, push
   `ghcr.io/<owner>/jetson-orin-bootc-<name>`, output the digest-pinned ref, and report the
@@ -345,9 +337,8 @@ hardware.
 2. MicroShift: `systemctl status microshift`, `oc get pods -A` all running with no registry,
    `vgs` shows free extents, a PVC binds on topolvm. `ip addr show lo` has `10.44.0.1/32` and
    `oc get node -o wide` shows it; pull the cable for a minute and `NRestarts` must not move.
-   `getent hosts kubernetes.default.svc.cluster.local` → `10.43.0.1`, cable in and out;
-   `oc get --raw /api/v1/nodes/jetson-1/proxy/configz | jq .kubeletconfig.resolvConf` names
-   the no-stub file, and a pod still resolves a `cloudlet.local` name. Then `oc` from the laptop.
+   `getent hosts kubernetes.default.svc.cluster.local` → `10.43.0.1`, and a pod still
+   resolves a `cloudlet.local` name. Then `oc` from the laptop.
 3. Device plugin: the DaemonSet runs and allocatable `nvidia.com/gpu` equals the replica
    count. Run that many GPU pods at once and watch for OOM.
 4. Services: pods Running in `cert-manager` (3), `external-secrets` (3) and `kserve` (1), with

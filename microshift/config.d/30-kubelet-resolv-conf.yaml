@@ -1,7 +1,4 @@
-# NetworkManager's dnsmasq leaves 127.0.0.1 in /etc/resolv.conf. Kubelet hands
-# that file to CoreDNS, where 127.0.0.1 is the pod itself, so every name outside
-# cluster.local would stop resolving in the cluster. This is the file
-# NetworkManager writes with the real nameservers. MicroShift does the same on
-# its own only for systemd-resolved.
+# dns=dnsmasq leaves 127.0.0.1 in /etc/resolv.conf, which inside CoreDNS is the
+# pod itself. This file has the real nameservers.
 kubelet:
   resolvConf: /run/NetworkManager/no-stub-resolv.conf
