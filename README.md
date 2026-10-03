@@ -141,22 +141,13 @@ variant, not a variant of its own. Three things:
   [How a node runs with no registry](#how-a-node-runs-with-no-registry).
 - **`jtop`** (jetson-stats, pinned by `JTOP_VER`), installed with `pip3 install --prefix=/usr`:
   on bootc, `/usr/local` is per-machine state and would not ship in the image.
-- **Red Hat Edge Manager agent** (`flightctl-agent`, which pulls `flightctl-selinux`) from
-  `edge-manager-<RHEM_VER>-for-rhel-9-aarch64-rpms` (`RHEM_VER=1.2`; keep it at the server's
-  version). Weak dependencies are off, so `flightctl-greenboot` and greenboot are not installed.
-  The service is enabled but idle: a drop-in gives it
-  `ConditionPathExists=/etc/flightctl/config.yaml`, so it starts only once an enrollment config
-  is on the node. That file is what connects a device, from any of: a later layer that `COPY`s
-  it in (every device from that image enrolls), a kickstart `%post`, or by hand followed by
-  `systemctl start flightctl-agent`. The config comes from the Edge Manager
-  (`flightctl certificate request --signer=enrollment --expiration=365d --output=embedded`).
-  A second drop-in skips `bootc-fetch-apply-updates.service` while that same file exists: once
-  enrolled, Edge Manager owns OS updates. Red Hat's example masks the timer outright instead.
+- **Edge Manager agent** (`flightctl-agent`, `RHEM_VER=1.2`, no weak deps so no greenboot).
+  Enabled but idle until `/etc/flightctl/config.yaml` exists; while it does,
+  `bootc-fetch-apply-updates.service` is skipped, since Edge Manager owns OS updates.
 
-Its smoke test checks the machinery and the agent are installed and enabled, that both
-drop-ins name a unit that exists, and that `jtop` is present. It also fails if this layer
-embedded any image, or carries `/etc/flightctl/config.yaml`, since anything here is paid for
-(or enrolled) by every variant.
+Its smoke test checks the machinery and the agent are installed and enabled and `jtop` is
+present. It also fails if this layer embedded any image, since anything embedded here would be
+paid for by every variant.
 
 The file name and the image name differ: `Containerfile.podman` builds the image published as
 `jetson-orin-bootc-bound-images`, from a CI job spelled `bound_images`. The underscore matters:
@@ -407,8 +398,7 @@ The services layer's images (`quay.io/jetstack`, `oci.external-secrets.io`, `doc
 Notes on registration:
 - **The subscription must include OpenShift**, or `rhocp-4.20-for-rhel-9-aarch64-rpms` never
   appears and the microshift build fails at `--enablerepo`.
-- **It must also include Red Hat Edge Manager**, or `edge-manager-1.2-for-rhel-9-aarch64-rpms`
-  never appears and the bound-images build fails at `--enablerepo`.
+- **It must also include Edge Manager**, or the bound-images build fails at `--enablerepo`.
 - **With Simple Content Access off,** registering needs `--auto-attach`.
 - **A username and password is the broader credential.** An organisation ID plus activation key
   is narrower, and it is the only option for accounts with SSO or two-factor.
@@ -595,9 +585,7 @@ also how k3s would come back.
   needs a one-time `bootc switch` or a retag before the ISO is built, plus registry credentials
   in `/etc/ostree/auth.json`.
 - **The address and hostname are per ISO, not per device.**
-- **No node is connected to Edge Manager.** The agent is installed and idle; nothing writes
-  `/etc/flightctl/config.yaml` yet, and whether the aarch64 agent RPM from
-  `edge-manager-1.2` installs on this image is proven only by a dispatched build.
+- **No node is connected to Edge Manager.** Nothing writes `/etc/flightctl/config.yaml` yet.
 
 The design record, with every decision and why, is `CLAUDE.md`.
 
@@ -608,7 +596,7 @@ The design record, with every decision and why, is `CLAUDE.md`.
 | `base/Containerfile.base` | layer 1: the pinned JetPack-for-RHEL image, republished |
 | `base/smoke-test.base.sh` | checks the vendor image is what we expect |
 | `base/Containerfile.podman` | layer 2: embedding machinery + jtop + Edge Manager agent |
-| `base/smoke-test.podman.sh` | checks the machinery, jtop and the agent, and that nothing was embedded or enrolled here |
+| `base/smoke-test.podman.sh` | checks the machinery, jtop and the agent, and that nothing was embedded here |
 | `base/physically-bound-images/embed_image.sh` | build time: copy one image into the cache in `/usr` |
 | `base/physically-bound-images/copy_embedded_images.sh` | boot time: restore the cache, prune what an older OS left |
 | `base/physically-bound-images/copy-embedded-images.service` | runs it once per boot, before MicroShift |

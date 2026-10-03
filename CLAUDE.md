@@ -143,16 +143,11 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   - `jetson-stats` (`jtop`, pinned `JTOP_VER`) via `pip3 install --prefix=/usr` (`/usr/local`
     is machine state on bootc). `python3-pip` comes from RHEL repos, so this layer needs
     entitlement. Whether `jtop` reaches the driver as installed is unverified.
-  - Red Hat Edge Manager agent: `flightctl-agent` from
-    `edge-manager-${RHEM_VER}-for-rhel-9-$(uname -m)-rpms` (`RHEM_VER=1.2`, match the server),
-    `install_weak_deps=False` (keeps out `flightctl-greenboot` and greenboot, still open). Enabled, but a drop-in adds
-    `ConditionPathExists=/etc/flightctl/config.yaml`: idle until an enrollment config lands
-    (later layer, kickstart `%post` or by hand); without one it would restart every minute. A
-    drop-in on `bootc-fetch-apply-updates.service` is the inverse condition: once enrolled,
-    Edge Manager owns updates. Red Hat masks the timer outright, which would also stop an
-    unenrolled node. The aarch64 install is unverified until dispatched.
-  Its smoke test fails if this layer has an image cache or an enrollment config: anything here
-  is paid (or enrolled) by every variant. It also checks both drop-ins name a unit that exists.
+  - `flightctl-agent` from `edge-manager-${RHEM_VER}-for-rhel-9-$(uname -m)-rpms`
+    (`RHEM_VER=1.2`, match the server), no weak deps (keeps greenboot out). Drop-ins key both
+    the agent and `bootc-fetch-apply-updates.service` on `/etc/flightctl/config.yaml`: agent
+    idle and bootc upgrading before enrollment, the reverse after. Unverified until dispatched.
+  Its smoke test fails if this layer has an image cache: anything here is paid by every variant.
 - `base/physically-bound-images/` — adapted from `redhat-et/edge-ai-image-pipelines`. Cache is
   `/usr/lib/containers-image-cache` with `mapping.txt` (reference → sha), copied into
   containers-storage once per boot by `copy-embedded-images.service` (a oneshot `Requires=`d by
@@ -323,9 +318,8 @@ image pulls, never in the image), `JETSON_SSH_PUBKEY`, `JETSON_PASSWORD_HASH`
 (`openssl passwd -6`). Registration replaced an entitlement-cert tarball. Username/password is
 maintainer preference; an org ID + activation key is narrower and needed for SSO/2FA accounts.
 Credentials go through `env:`. With Simple Content Access off, register needs `--auto-attach`.
-The subscription needs an OpenShift entitlement or the `rhocp` repo never appears, and an Edge
-Manager one or the `edge-manager` repo never appears. A
-self-hosted registered RHEL 9 aarch64 runner would remove registration entirely.
+The subscription needs OpenShift and Edge Manager entitlements, or `rhocp` and `edge-manager`
+never appear. A self-hosted registered RHEL 9 aarch64 runner would remove registration entirely.
 
 **bib**: `registry.redhat.io/rhel9/bootc-image-builder` is the supported path for RHEL
 content; output is `output/bootiso/install.iso`. The installer boots the stock RHEL kernel, and
@@ -338,9 +332,8 @@ hardware.
 1. Dispatch `build-microshift.yml`, `dd` the ISO, boot the devkit (QSPI from R36.5.x). Check
    `bootc status` (expect a digest-pinned GHCR origin, which cannot upgrade), `lsmod | grep
    nvgpu`, `nvidia-ctk cdi list` → `nvidia.com/gpu=all`, a GPU container, `systemctl
-   is-enabled bootc-fetch-apply-updates.timer`, and whether `jtop` works. `systemctl status
-   flightctl-agent` should read "condition failed", not a restart loop; drop in a
-   `config.yaml` and it should enroll once the Edge Manager is reachable.
+   is-enabled bootc-fetch-apply-updates.timer`, whether `jtop` works, and that
+   `flightctl-agent` is skipped on its condition, not restarting.
 2. MicroShift: `systemctl status microshift`, `oc get pods -A` all running with no registry,
    `vgs` shows free extents, a PVC binds on topolvm. `ip addr show lo` has `10.44.0.1/32` and
    `oc get node -o wide` shows it; pull the cable for a minute and `NRestarts` must not move.
@@ -366,9 +359,9 @@ hardware.
 6.2.2 and the 8Gi slice size; where InferenceServices live, and whether models get their own
 layer above `services/`; what External Secrets reads from; NVMe before real apps land;
 registration vs. a self-hosted runner; per-device address and hostname before a second node;
-opening the k3s kubeconfig to `cloudlet`; how the Edge Manager enrollment config reaches a
-node (baked layer, kickstart or by hand) and whether greenboot comes with it; whether k3s comes
-back, and how service images would reach containerd without doubling `/usr`; `bootc switch` vs. retag for the node's origin, and
+opening the k3s kubeconfig to `cloudlet`; how `/etc/flightctl/config.yaml` reaches a node, and
+greenboot; whether k3s comes back, and how service images would reach containerd without
+doubling `/usr`; `bootc switch` vs. retag for the node's origin, and
 whether `stable` moves on every green build or only after a hardware boot; whether the
 `services/` resource sizes survive hardware (the ratios are enforced, the sizes are guesses).
 

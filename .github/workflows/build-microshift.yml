@@ -30,8 +30,7 @@ jobs:
     secrets: inherit
     permissions: { contents: read, packages: write }
 
-  # The image-embedding machinery, jtop and the Edge Manager agent. Shared by
-  # every variant.
+  # The image-embedding machinery. Shared by every variant.
   # Job id with an underscore, image name with a hyphen: needs.bound-images
   # parses as a subtraction, so a dotted reference to a hyphenated id resolves
   # to nothing instead of failing.
