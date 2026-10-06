@@ -161,23 +161,14 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     Otherwise the first thing to prune would be kubelet's image GC at 85% disk, deleting
     exactly the images there is no registry to re-pull. Prune runs before copy; an image still
     held by a container stays on the list for next boot; failures are logged, never fatal.
-  - **Pinned in CRI-O** (`microshift/crio.conf.d/20-pinned-images.conf`), so kubelet's image GC
-    (unused images at 85% disk) and its disk-pressure reclaim (every unused image at once) skip
-    every embedded image. Without it, an embedded image unused at that moment (Triton with no
-    InferenceService, the largest) is gone until the next boot. The prune is unaffected:
-    `podman rmi` does not read CRI-O pins. Patterns are registry prefixes (`quay.io/*`,
-    `registry.redhat.io/*`, `nvcr.io/*`; `services/` appends `docker.io/*` and
-    `oci.external-secrets.io/*` with `sed`). **One list**: a second drop-in setting
-    `pinned_images` replaces it, so a later layer appends to this file. **No pattern may match
-    an image the node pulls**: kubelet could not delete it and the prune does not track it, so
-    every old version stays. Hence no `registries.conf` mirror for a pinned registry (a mirrored
-    pull is stored under the original name), and application layers built in the air-gapped
-    environment embed from a path pulled images never use (`<registry>/embedded/*` pinned,
-    `<registry>/apps/*` not). The microshift and services smoke tests read the merged list from
-    `crio config` (`Validate(false)`, no daemon; a list left at its default prints commented
-    out) and fail on any `mapping.txt` reference no pattern covers, which catches an override,
-    a `sed` that matched nothing, and an upstream moving registry. Kubelet's own GC thresholds
-    are untouched; on one filesystem they coincide with `imagefs.available<15%` eviction.
+  - **Pinned in CRI-O** (`microshift/crio.conf.d/20-pinned-images.conf`): kubelet's image GC
+    and disk-pressure reclaim skip embedded images (an unused Triton would otherwise be gone
+    until the next boot); the prune still removes them, since podman ignores CRI-O pins.
+    Registry prefixes; `services/` appends `docker.io/*` and `oci.external-secrets.io/*` with
+    `sed`. **One list**: a second drop-in replaces it. **Never pin a pulled image**: nothing
+    would delete it. So no `registries.conf` mirror for a pinned registry, and air-gapped app
+    layers embed from `<registry>/embedded/*`, pull from `<registry>/apps/*`. Both smoke tests
+    check every `mapping.txt` reference against `crio config`. GC thresholds are untouched.
 - `microshift/Containerfile` — MicroShift 4.20 from `rhocp-4.20-for-rhel-9-aarch64-rpms` +
   `fast-datapath-for-rhel-9-aarch64-rpms` (`firewalld jq microshift microshift-release-info
   openshift-clients`; `oc` is in `openshift-clients`), firewall rules (trusted: `10.42.0.0/16`,
