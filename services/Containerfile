@@ -24,9 +24,8 @@ ARG KSERVE_VER=v0.20.0
 RUN curl -fsSL -o /etc/microshift/manifests.d/030-kserve/kserve.yaml \
       "https://github.com/kserve/kserve/releases/download/${KSERVE_VER}/kserve.yaml"
 
-# The registries these roots embed from that microshift/ does not pin: KServe
-# and External Secrets. Appended, never a second drop-in, which would replace
-# the list. The smoke test is what notices a sed that matched nothing.
+# Pins KServe's and External Secrets' registries. Appended: a second drop-in
+# would replace the list.
 RUN sed -i 's|^pinned_images = \[$|&\n\t"docker.io/*",\n\t"oci.external-secrets.io/*",|' \
         /etc/crio/crio.conf.d/20-pinned-images.conf
 

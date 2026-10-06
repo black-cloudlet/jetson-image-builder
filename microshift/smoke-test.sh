@@ -134,12 +134,8 @@ while read -r img; do
 done <<<"$images"
 
 echo "== embedded images pinned =="
-# Kubelet deletes unused images at 85% disk, and every unused one at once under
-# disk pressure; with no registry an embedded image is then gone until the next
-# boot. A CRI-O pin exempts it from both. Read from `crio config`, which merges
-# every drop-in, not from our file: a later drop-in setting pinned_images
-# replaces the list, and an upstream moving registry leaves its image unpinned.
-# Captured first, so a failing crio config is not a loop over nothing.
+# From `crio config`, the merged drop-ins: catches a list replaced by a later
+# drop-in, a sed that matched nothing, and an upstream that moved registry.
 cfg=$(crio config) || fail "crio config failed; its stderr is above"
 mapfile -t pins < <(sed -n '/^[[:space:]]*pinned_images = \[/,/^[[:space:]]*\]/s/^[[:space:]]*"\(.*\)",$/\1/p' <<<"$cfg")
 (( ${#pins[@]} )) || fail "crio config pins no images:" \
