@@ -25,10 +25,10 @@ COPY --chmod=0644 base/physically-bound-images/copy-embedded-images.service \
       /usr/lib/systemd/system/copy-embedded-images.service
 RUN systemctl enable copy-embedded-images.service
 
-# Edge Manager agent; RHEM_VER matches the server. No weak deps: keeps greenboot out.
-ARG RHEM_VER=1.2
+# Edge Manager agent from ACM; ACM_VER matches the hub. No weak deps: keeps greenboot out.
+ARG ACM_VER=2.15
 RUN dnf install -y --setopt=install_weak_deps=False \
-        --enablerepo="edge-manager-${RHEM_VER}-for-rhel-9-$(uname -m)-rpms" \
+        --enablerepo="rhacm-${ACM_VER}-for-rhel-9-$(uname -m)-rpms" \
         flightctl-agent && \
     systemctl enable flightctl-agent.service && \
     dnf clean all
