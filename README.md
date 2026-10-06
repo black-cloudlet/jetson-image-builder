@@ -174,10 +174,12 @@ The file name and the image name differ: `Containerfile.podman` builds the image
 - **Every image MicroShift and the plugin run**, embedded: the control-plane list from
   `microshift-release-info`, plus whatever the manifests name, found by rendering them with
   `microshift/manifest-images.sh`.
+- **Embedded images pinned in CRI-O** (`/etc/crio/crio.conf.d/20-pinned-images.conf`), so
+  kubelet's image garbage collection never deletes one. See *How a node runs with no registry*.
 
 Its smoke test checks the units are enabled, that the `lo` address and `nodeIP` agree, the CRI-O
 NVIDIA drop-in, how the time-slicing patch is wired in the rendered manifest, and that every
-image is embedded.
+image is embedded and pinned.
 
 ### services: what runs on the cluster
 
@@ -297,6 +299,21 @@ restored into the container store at boot:
    longer names, because nothing else would prune them except kubelet's image garbage
    collection at 85% disk, which would delete exactly the images the node cannot re-pull. It
    does not wait for the network: the copy is local.
+3. **Pinned.** Kubelet deletes unused images at 85% disk, and every unused image at once when
+   the disk is under pressure. An embedded image that no pod happens to be using (Triton before
+   any InferenceService exists) would then be gone until the next boot. CRI-O's
+   `pinned_images` exempts an image from both, and `20-pinned-images.conf` pins the registries
+   the layers embed from: `microshift/` ships `quay.io`, `registry.redhat.io` and `nvcr.io`,
+   and `services/` appends `docker.io` and `oci.external-secrets.io`. Upgrades still remove what
+   a new OS drops, because `podman rmi` does not read CRI-O pins.
+   - **One list.** A second CRI-O drop-in that sets `pinned_images` replaces the list rather
+     than adding to it, so a later layer appends a line to this file.
+   - **Never pin what the node pulls.** A pulled image matching a pattern can be deleted by
+     neither kubelet nor the boot-time prune, so every old version stays. Push images an
+     application layer embeds under a path that pulled images never use, and pin only that
+     (`registry.example/embedded/*`, not `registry.example/*`). Do not mirror a pinned registry
+     in `registries.conf`: a mirrored pull is stored under the original name.
+   - The smoke tests fail when `crio config` leaves any embedded image unpinned.
 
 The image list is **derived, not maintained**. Each layer renders its own manifests with
 `microshift/manifest-images.sh` and embeds whatever `image:` fields they contain, so the pinned
@@ -558,7 +575,9 @@ sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfi
 `services/manifests/` with a `kustomization.yaml`. The build embeds whatever images it renders.
 Give every container requests and limits at the house ratios, keep it admissible under
 `restricted-v2`, and add its workloads to the smoke test's expected set. Images named outside an
-`image:` field, such as a model's `oci://` image, go in `SERVICE_IMAGES`.
+`image:` field, such as a model's `oci://` image, go in `SERVICE_IMAGES`. An image from a registry not yet
+pinned needs its prefix appended to `20-pinned-images.conf` (the `sed` in `services/Containerfile`);
+the smoke test names it otherwise.
 
 **A variant:** create `<name>/` with a `Containerfile` (`FROM` bound-images via
 `ARG BASE_IMAGE`), a `config.toml` and a `smoke-test.sh`. Then copy `build-microshift.yml` and
@@ -599,6 +618,7 @@ The design record, with every decision and why, is `CLAUDE.md`.
 | `microshift/manifests/` | device-plugin kustomization and the GPU time-slicing config |
 | `microshift/stable-microshift.nmconnection` | `10.44.0.1/32` on `lo` |
 | `microshift/config.d/10-node-ip.yaml` | tells MicroShift to use it |
+| `microshift/crio.conf.d/20-pinned-images.conf` | CRI-O pins: kubelet never deletes an embedded image |
 | `microshift/manifest-images.sh` | renders manifest roots, prints every image they name |
 | `microshift/config.toml` | installer config: the kickstart, ISO label, boot menu timeout |
 | `microshift/smoke-test.sh` | checks for the microshift layer |

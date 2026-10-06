@@ -161,6 +161,23 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     Otherwise the first thing to prune would be kubelet's image GC at 85% disk, deleting
     exactly the images there is no registry to re-pull. Prune runs before copy; an image still
     held by a container stays on the list for next boot; failures are logged, never fatal.
+  - **Pinned in CRI-O** (`microshift/crio.conf.d/20-pinned-images.conf`), so kubelet's image GC
+    (unused images at 85% disk) and its disk-pressure reclaim (every unused image at once) skip
+    every embedded image. Without it, an embedded image unused at that moment (Triton with no
+    InferenceService, the largest) is gone until the next boot. The prune is unaffected:
+    `podman rmi` does not read CRI-O pins. Patterns are registry prefixes (`quay.io/*`,
+    `registry.redhat.io/*`, `nvcr.io/*`; `services/` appends `docker.io/*` and
+    `oci.external-secrets.io/*` with `sed`). **One list**: a second drop-in setting
+    `pinned_images` replaces it, so a later layer appends to this file. **No pattern may match
+    an image the node pulls**: kubelet could not delete it and the prune does not track it, so
+    every old version stays. Hence no `registries.conf` mirror for a pinned registry (a mirrored
+    pull is stored under the original name), and application layers built in the air-gapped
+    environment embed from a path pulled images never use (`<registry>/embedded/*` pinned,
+    `<registry>/apps/*` not). The microshift and services smoke tests read the merged list from
+    `crio config` (`Validate(false)`, no daemon; a list left at its default prints commented
+    out) and fail on any `mapping.txt` reference no pattern covers, which catches an override,
+    a `sed` that matched nothing, and an upstream moving registry. Kubelet's own GC thresholds
+    are untouched; on one filesystem they coincide with `imagefs.available<15%` eviction.
 - `microshift/Containerfile` — MicroShift 4.20 from `rhocp-4.20-for-rhel-9-aarch64-rpms` +
   `fast-datapath-for-rhel-9-aarch64-rpms` (`firewalld jq microshift microshift-release-info
   openshift-clients`; `oc` is in `openshift-clients`), firewall rules (trusted: `10.42.0.0/16`,
@@ -240,7 +257,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   External Secrets without `runAsUser`, with `runAsNonRoot`, in its own namespace and naming
   `default` nowhere outside its CRDs; `inferenceservice-config` values; every pod template and
   serving-runtime container admissible under restricted-v2; requests, limits and ratios; no
-  container whose pull policy is, or defaults to, `Always`; every image qualified and embedded; no `ClusterStorageContainer`; one KServe tag. It prints
+  container whose pull policy is, or defaults to, `Always`; every image qualified and embedded;
+  every `mapping.txt` reference pinned by `crio config`; no `ClusterStorageContainer`; one KServe tag. It prints
   `du -sh` of the cache, which the eMMC pays for twice (`/usr` and containers-storage). Pods
   KServe builds at run time are in no render: their admission and GPU access are hardware
   questions.
@@ -332,7 +350,10 @@ hardware.
 2. MicroShift: `systemctl status microshift`, `oc get pods -A` all running with no registry,
    `vgs` shows free extents, a PVC binds on topolvm. `ip addr show lo` has `10.44.0.1/32` and
    `oc get node -o wide` shows it; pull the cable for a minute and `NRestarts` must not move.
-   Then `oc` from the laptop.
+   Then `oc` from the laptop. Pins: `crictl images -o json | jq '.images[] | {repoTags,
+   repoDigests, pinned}'` shows `pinned: true` for every embedded image (digest-only names
+   included), `crio config | grep -A12 pinned_images` shows our list and nothing from the
+   MicroShift RPM was replaced, and an image a new OS drops is still removed by the prune.
 3. Device plugin: the DaemonSet runs and allocatable `nvidia.com/gpu` equals the replica
    count. Run that many GPU pods at once and watch for OOM.
 4. Services: pods Running in `cert-manager` (3), `external-secrets` (3) and `kserve` (1), with
@@ -356,7 +377,8 @@ layer above `services/`; what External Secrets reads from; NVMe before real apps
 registration vs. a self-hosted runner; per-device address and hostname before a second node;
 opening the k3s kubeconfig to `cloudlet`; whether k3s comes back, and how service images would
 reach containerd without doubling `/usr`; `bootc switch` vs. retag for the node's origin, and
-whether `stable` moves on every green build or only after a hardware boot; whether the
+whether `stable` moves on every green build or only after a hardware boot; lowering kubelet's
+image GC thresholds below the eviction line (only matters once images are pulled); whether the
 `services/` resource sizes survive hardware (the ratios are enforced, the sizes are guesses).
 
 ## How to work in this repo

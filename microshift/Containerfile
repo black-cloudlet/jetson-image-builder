@@ -59,6 +59,10 @@ ARG NVIDIA_DEVICE_PLUGIN_VER=v0.20.0
 RUN nvidia-ctk runtime configure --runtime=crio --set-as-default \
         --config=/etc/crio/crio.conf.d/99-nvidia.toml
 
+# Pins the registries embedded images come from; services/ appends its own.
+COPY microshift/crio.conf.d/20-pinned-images.conf \
+      /etc/crio/crio.conf.d/20-pinned-images.conf
+
 RUN mkdir -p /etc/microshift/manifests && \
     curl -fsSL -o /etc/microshift/manifests/nvidia-device-plugin.yml \
       "https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/${NVIDIA_DEVICE_PLUGIN_VER}/deployments/static/nvidia-device-plugin.yml"
