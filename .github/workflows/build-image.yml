@@ -30,6 +30,13 @@ on:
           separated. All of them point at the same digest.
         type: string
         default: ""
+      rechunk:
+        description: |
+          re-split the finished image into reproducible per-package layers. Only
+          the image nodes boot needs it: it is redone from the whole merged tree,
+          so rechunking a layer below buys nothing.
+        type: boolean
+        default: false
       runs-on:
         description: runner label; must be native aarch64
         type: string
@@ -155,6 +162,36 @@ jobs:
           podman build "${args[@]}" \
             --secret id=pullsecret,src=/tmp/pull-secret.json \
             -f "${{ inputs.containerfile }}" .
+
+      # Each RUN leaves one layer stamped with this build's mtimes, so a rebuild
+      # of unchanged content still gets new digests and a node re-downloads all
+      # of it. Rechunking re-splits the merged tree by RPM with mtimes zeroed, so
+      # an unchanged package keeps its layer digest. The tool and rpm-ostree come
+      # from Red Hat's rhel-bootc base, so it runs inside the image it rewrites.
+      # The builder's storage.conf goes in too: one store, one set of mount
+      # options. Before the size and smoke test, so both see what is pushed.
+      - name: Rechunk
+        if: inputs.rechunk
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          podman run --rm --privileged \
+            -v /var/lib/containers:/var/lib/containers \
+            -v /etc/containers/storage.conf:/etc/containers/storage.conf:ro \
+            "$IMAGE:$TAG" \
+            /usr/libexec/bootc-base-imagectl rechunk "$IMAGE:$TAG" "localhost/rechunked:$TAG"
+          for t in $TAGS; do
+            podman tag "localhost/rechunked:$TAG" "$IMAGE:$t"
+          done
+          podman untag "localhost/rechunked:$TAG"
+          # A rewritten image: prove it is still one bootc will install.
+          podman run --rm "$IMAGE:$TAG" bootc container lint
+          layers=$(podman image inspect --format '{{len .RootFS.Layers}}' "$IMAGE:$TAG")
+          echo "::notice title=${{ inputs.name }} rechunked::$layers layers"
+          # How content no RPM owns (the embedded images) was grouped.
+          podman history --format '{{.Size}}\t{{.CreatedBy}}' "$IMAGE:$TAG" | cut -c1-160
+          df -h /var/lib/containers
 
       # Roughly what the deployment occupies on the node — the number the root LV
       # is sized against. Per layer, so the differences say where the bytes went.

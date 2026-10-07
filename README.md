@@ -349,11 +349,18 @@ strips `metacopy` and fails unless `podman info` reports `Native Overlay Diff:tr
 4. Log in to GHCR and write the OpenShift pull secret (build-time only, never in the image).
 5. Build the layer with the **repository root as context**, `BASE_IMAGE` set to the previous
    layer's **digest**.
-6. Report the layer's size as a `::notice`.
-7. Run the layer's **smoke test inside the built image** (`podman run -i … bash -s <
+6. **`services` only: rechunk.** `bootc-base-imagectl rechunk`, run inside the image it rewrites
+   (Red Hat's `rhel-bootc` base ships it and `rpm-ostree`), re-splits the merged tree into
+   per-RPM layers with mtimes zeroed, and the tags move onto the result. A plain build stamps
+   every layer with the build's mtimes, so an unchanged rebuild still gets new digests; after
+   rechunking, an unchanged package keeps its layer digest, and a `bootc upgrade` or a mirror
+   copy fetches only what changed. The result must pass `bootc container lint`; the layer
+   count is a `::notice` and the log lists each layer's size.
+7. Report the layer's size as a `::notice`.
+8. Run the layer's **smoke test inside the built image** (`podman run -i … bash -s <
    smoke-test.sh`); a failure stops the chain before anything is pushed.
-8. Push under every tag and output the image pinned by digest for the next job.
-9. Unregister, even on failure.
+9. Push under every tag and output the image pinned by digest for the next job.
+10. Unregister, even on failure.
 
 Every layer is published under these tags, all naming the same manifest:
 
@@ -361,7 +368,7 @@ Every layer is published under these tags, all naming the same manifest:
 |---|---|
 | `<YYYYMMDD>-<sha8>` | immutable: what a node rolls back to, what a mirror keeps |
 | `latest` | the last build |
-| `stable` | the release set: all four layers from one run, mirrored together |
+| `stable` | the release set: all four layers from one run, mirrored together. `services` is rechunked, so it shares no blobs with the three below it: a mirror of all four stores that content twice, and a node needs only `services` |
 | `4.20` | the MicroShift minor, on `microshift` and `services` only; set from the same line as the build's `USHIFT_VER`, so the tag cannot claim a version it was not built from |
 
 ### The ISO (`build-iso.yml`)

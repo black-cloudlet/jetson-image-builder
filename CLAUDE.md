@@ -83,7 +83,11 @@ only. KServe was removed once before (`bba9d10`, reason unrecorded).
    1.16.4): `/etc/nv_tegra_release` is **R36 REVISION 5.0** (L4T r36.5.0); it carries the
    `nvidia-jetpack-for-rhel-9.8-*` packages, `nvidia-container-toolkit-base` (CDI, no
    `nvidia-container-cli`), `nvgpu.ko`, `nvidia-ctk.service` (writes `/etc/cdi/nvidia.yaml` at
-   boot), `nvpmodel`, the console kargs, `podman`, `skopeo` and `subscription-manager`. So our
+   boot), `nvpmodel`, the console kargs, `podman`, `skopeo` and `subscription-manager`. It is
+   built on `rhel9/rhel-bootc` 9.8 (labels), whose layers are already rpm-ostree-chunked (67
+   layers); NVIDIA's part sits on top unchunked. Re-inspected 2026-10-06: it carries
+   `/usr/libexec/bootc-base-imagectl` (no RPM owns it) with a `rechunk` verb, and
+   `rpm-ostree-2026.1-6.el9_8`; no `chunkah`. So our
    layers add **no** NVIDIA packages, CDI unit, kargs or `nvgpu.ko` guard. Pin the full tag,
    never `latest`. Source: `gitlab.com/redhat/rhel/sst/orin-sidecar/rhel-jetpack-for-jetson-bootc`.
 5. **The BSP must match the image's L4T line**: flash the QSPI from **R36.5.x** (the staged
@@ -291,6 +295,16 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   layer size as a `::notice`. Tags: `<YYYYMMDD-sha8>`, `latest`, and `extra-tags` (`stable`
   on all four layers; `4.20` on the two with MicroShift, passed from the same lines as
   `USHIFT_VER` so the tag cannot lie). Tags are validated before the build.
+  `rechunk: true` (services only) runs `bootc-base-imagectl rechunk` between build and smoke
+  test, inside the image it rewrites (that is where the tool and `rpm-ostree` are), with the
+  builder's store and `storage.conf` mounted in; it wraps `rpm-ostree experimental compose
+  build-chunked-oci --bootc --format-version=1`. Tags move onto the result, which must pass
+  `bootc container lint`; layer count is a `::notice`, per-layer sizes go to the log. Why:
+  a plain build stamps every layer with the build's mtimes, so an unchanged rebuild gets new
+  digests and a node or mirror re-fetches everything. Rechunked, `services` shares no blobs
+  with the layers below. **Unverified until dispatched**: that it runs nested in the UBI
+  container, its time and disk on the runner, how it groups the embedded images (no RPM owns
+  them), and whether two builds of unchanged content really share digests.
   **What a node follows is not settled.** bib installs the services layer pinned by digest
   from GHCR, so `bootc upgrade` has nothing to re-resolve and could not reach it anyway.
   `ostreecontainer` has no `--target-imgref`. Pointing the origin at the air-gapped `stable`
@@ -332,7 +346,9 @@ hardware.
    `bootc status` (expect a digest-pinned GHCR origin, which cannot upgrade), `lsmod | grep
    nvgpu`, `nvidia-ctk cdi list` → `nvidia.com/gpu=all`, a GPU container, `systemctl
    is-enabled bootc-fetch-apply-updates.timer`, whether `jtop` works, and that
-   `flightctl-agent` is skipped on its condition, not restarting.
+   `flightctl-agent` is skipped on its condition, not restarting. Separately, dispatch twice
+   with no change and compare the `services` layer digests (`skopeo inspect`): the rechunk is
+   only worth its runner time if most of them match.
 2. MicroShift: `systemctl status microshift`, `oc get pods -A` all running with no registry,
    `vgs` shows free extents, a PVC binds on topolvm. `ip addr show lo` has `10.44.0.1/32` and
    `oc get node -o wide` shows it; pull the cable for a minute and `NRestarts` must not move.

@@ -78,6 +78,9 @@ jobs:
       # Built FROM the microshift layer, so it carries that MicroShift version
       # too — and this is the image a node actually boots and upgrades.
       extra-tags: stable 4.20
+      # Only this layer: it is what a node downloads, and the split is redone
+      # from the whole tree whatever the layers below look like.
+      rechunk: true
     secrets: inherit
     permissions: { contents: read, packages: write }
 
