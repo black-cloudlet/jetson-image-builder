@@ -174,8 +174,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     layers embed from `<registry>/embedded/*`, pull from `<registry>/apps/*`. Both smoke tests
     check every `mapping.txt` reference against `crio config`. GC thresholds are untouched.
 - `microshift/Containerfile` — MicroShift 4.20 from `rhocp-4.20-for-rhel-9-aarch64-rpms` +
-  `fast-datapath-for-rhel-9-aarch64-rpms` (`firewalld jq microshift microshift-release-info
-  openshift-clients`; `oc` is in `openshift-clients`), firewall rules (trusted: `10.42.0.0/16`,
+  `fast-datapath-for-rhel-9-aarch64-rpms` (`dnsmasq firewalld jq microshift
+  microshift-release-info openshift-clients`; `oc` is in `openshift-clients`), firewall rules (trusted: `10.42.0.0/16`,
   `10.43.0.0/16`, `169.254.169.1`; public: 22, 443, 6443), `microshift-make-rshared.service`,
   the node IP on `lo` (below), every MicroShift image embedded with a `microshift.service.d`
   drop-in ordering the copy first, and the NVIDIA device plugin:
@@ -294,6 +294,11 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `ignore-carrier` was rejected: it keeps MicroShift tied to `eth0`. A node initialised on
   `192.168.1.10` needs `microshift-cleanup-data --ovn` or a re-image. A clock step over 10 s
   (first chrony sync) can still cost one restart.
+- **Split DNS** — NM's `dns=dnsmasq` plus `server=/cluster.local/10.43.0.10` (CoreDNS) lets
+  the node resolve full `<svc>.<ns>.svc.cluster.local` names. dnsmasq, not systemd-resolved
+  (Tech Preview on RHEL 9). `/etc/resolv.conf` becomes `127.0.0.1`, so
+  `config.d/30-kubelet-resolv-conf.yaml` points kubelet (and so CoreDNS's upstream) at
+  `/run/NetworkManager/no-stub-resolv.conf`. Unverified on hardware.
 - `.github/workflows/build-image.yml` — **reusable**: register, bind storage for native
   overlay, write the pull secret, build, run the smoke test inside the result, push
   `ghcr.io/<owner>/jetson-orin-bootc-<name>`, output the digest-pinned ref, and report the
@@ -345,10 +350,12 @@ hardware.
 2. MicroShift: `systemctl status microshift`, `oc get pods -A` all running with no registry,
    `vgs` shows free extents, a PVC binds on topolvm. `ip addr show lo` has `10.44.0.1/32` and
    `oc get node -o wide` shows it; pull the cable for a minute and `NRestarts` must not move.
-   Then `oc` from the laptop. Pins: `crictl images -o json | jq '.images[] | {repoTags,
-   repoDigests, pinned}'` shows `pinned: true` for every embedded image (digest-only names
-   included), `crio config | grep -A12 pinned_images` shows our list and nothing from the
-   MicroShift RPM was replaced, and an image a new OS drops is still removed by the prune.
+   `getent hosts kubernetes.default.svc.cluster.local` → `10.43.0.1`, and a pod still
+   resolves a `cloudlet.local` name. Then `oc` from the laptop. Pins: `crictl images -o json |
+   jq '.images[] | {repoTags, repoDigests, pinned}'` shows `pinned: true` for every embedded
+   image (digest-only names included), `crio config | grep -A12 pinned_images` shows our list
+   and nothing from the MicroShift RPM was replaced, and an image a new OS drops is still
+   removed by the prune.
 3. Device plugin: the DaemonSet runs and allocatable `nvidia.com/gpu` equals the replica
    count. Run that many GPU pods at once and watch for OOM.
 4. Services: pods Running in `cert-manager` (3), `external-secrets` (3) and `kserve` (1), with
