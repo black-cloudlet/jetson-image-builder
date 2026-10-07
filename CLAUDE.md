@@ -302,9 +302,10 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `bootc container lint`; layer count is a `::notice`, per-layer sizes go to the log. Why:
   a plain build stamps every layer with the build's mtimes, so an unchanged rebuild gets new
   digests and a node or mirror re-fetches everything. Rechunked, `services` shares no blobs
-  with the layers below. **Unverified until dispatched**: that it runs nested in the UBI
-  container, its time and disk on the runner, how it groups the embedded images (no RPM owns
-  them), and whether two builds of unchanged content really share digests.
+  with the layers below. Dispatched once (run 33): it runs nested in the UBI container and
+  takes ~7.5 min (683 packages, 46615 objects, 3.85 GB of RPM content). Still unverified: the
+  lint and smoke test on its output, its disk headroom, how it groups the embedded images (no
+  RPM owns them), and whether two builds of unchanged content really share digests.
   **What a node follows is not settled.** bib installs the services layer pinned by digest
   from GHCR, so `bootc upgrade` has nothing to re-resolve and could not reach it anyway.
   `ostreecontainer` has no `--target-imgref`. Pointing the origin at the air-gapped `stable`
@@ -429,6 +430,8 @@ whether `stable` moves on every green build or only after a hardware boot; wheth
 - `imagePullPolicy: Always` pulls even with the image in containers-storage, so on a node with
   no registry an embedded image still ends in ImagePullBackOff. Unset, it defaults to `Always`
   for `:latest` or no tag. Upstream KServe's manager ships with it; check each new upstream.
+- `podman untag IMAGE` with no name removes **every** name from the image. Retagging and then
+  `untag`ging the temporary name alone stripped the real tags too (run 33); name both.
 - jq's `a // b` treats `false` as missing. Where an explicit `false` must win over a fallback,
   test for `null`.
 - A render-time check cannot see what a webhook injects. For KServe's `uidModelcar` the only

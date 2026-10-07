@@ -184,7 +184,8 @@ jobs:
           for t in $TAGS; do
             podman tag "localhost/rechunked:$TAG" "$IMAGE:$t"
           done
-          podman untag "localhost/rechunked:$TAG"
+          # Name what to remove: with no name, untag strips every tag, ours too.
+          podman untag "$IMAGE:$TAG" "localhost/rechunked:$TAG"
           # A rewritten image: prove it is still one bootc will install.
           podman run --rm "$IMAGE:$TAG" bootc container lint
           layers=$(podman image inspect --format '{{len .RootFS.Layers}}' "$IMAGE:$TAG")
