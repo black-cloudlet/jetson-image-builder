@@ -165,6 +165,14 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     Otherwise the first thing to prune would be kubelet's image GC at 85% disk, deleting
     exactly the images there is no registry to re-pull. Prune runs before copy; an image still
     held by a container stays on the list for next boot; failures are logged, never fatal.
+  - **Pinned in CRI-O** (`microshift/crio.conf.d/20-pinned-images.conf`): kubelet's image GC
+    and disk-pressure reclaim skip embedded images (an unused Triton would otherwise be gone
+    until the next boot); the prune still removes them, since podman ignores CRI-O pins.
+    Registry prefixes; `services/` appends `docker.io/*` and `oci.external-secrets.io/*` with
+    `sed`. **One list**: a second drop-in replaces it. **Never pin a pulled image**: nothing
+    would delete it. So no `registries.conf` mirror for a pinned registry, and air-gapped app
+    layers embed from `<registry>/embedded/*`, pull from `<registry>/apps/*`. Both smoke tests
+    check every `mapping.txt` reference against `crio config`. GC thresholds are untouched.
 - `microshift/Containerfile` — MicroShift 4.20 from `rhocp-4.20-for-rhel-9-aarch64-rpms` +
   `fast-datapath-for-rhel-9-aarch64-rpms` (`dnsmasq firewalld jq microshift
   microshift-release-info openshift-clients`; `oc` is in `openshift-clients`), firewall rules (trusted: `10.42.0.0/16`,
@@ -244,7 +252,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   External Secrets without `runAsUser`, with `runAsNonRoot`, in its own namespace and naming
   `default` nowhere outside its CRDs; `inferenceservice-config` values; every pod template and
   serving-runtime container admissible under restricted-v2; requests, limits and ratios; no
-  container whose pull policy is, or defaults to, `Always`; every image qualified and embedded; no `ClusterStorageContainer`; one KServe tag. It prints
+  container whose pull policy is, or defaults to, `Always`; every image qualified and embedded;
+  every `mapping.txt` reference pinned by `crio config`; no `ClusterStorageContainer`; one KServe tag. It prints
   `du -sh` of the cache, which the eMMC pays for twice (`/usr` and containers-storage). Pods
   KServe builds at run time are in no render: their admission and GPU access are hardware
   questions.
@@ -342,7 +351,11 @@ hardware.
    `vgs` shows free extents, a PVC binds on topolvm. `ip addr show lo` has `10.44.0.1/32` and
    `oc get node -o wide` shows it; pull the cable for a minute and `NRestarts` must not move.
    `getent hosts kubernetes.default.svc.cluster.local` → `10.43.0.1`, and a pod still
-   resolves a `cloudlet.local` name. Then `oc` from the laptop.
+   resolves a `cloudlet.local` name. Then `oc` from the laptop. Pins: `crictl images -o json |
+   jq '.images[] | {repoTags, repoDigests, pinned}'` shows `pinned: true` for every embedded
+   image (digest-only names included), `crio config | grep -A12 pinned_images` shows our list
+   and nothing from the MicroShift RPM was replaced, and an image a new OS drops is still
+   removed by the prune.
 3. Device plugin: the DaemonSet runs and allocatable `nvidia.com/gpu` equals the replica
    count. Run that many GPU pods at once and watch for OOM.
 4. Services: pods Running in `cert-manager` (3), `external-secrets` (3) and `kserve` (1), with
@@ -367,7 +380,8 @@ registration vs. a self-hosted runner; per-device address and hostname before a 
 opening the k3s kubeconfig to `cloudlet`; how `/etc/flightctl/config.yaml` reaches a node, and
 greenboot; whether k3s comes back, and how service images would reach containerd without
 doubling `/usr`; `bootc switch` vs. retag for the node's origin, and
-whether `stable` moves on every green build or only after a hardware boot; whether the
+whether `stable` moves on every green build or only after a hardware boot; lowering kubelet's
+image GC thresholds below the eviction line (only matters once images are pulled); whether the
 `services/` resource sizes survive hardware (the ratios are enforced, the sizes are guesses).
 
 ## How to work in this repo

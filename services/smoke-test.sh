@@ -302,4 +302,31 @@ done < "$cache/mapping.txt"
 echo "embedded: $(wc -l < "$cache/mapping.txt") images"
 du -sh "$cache"
 
+echo "== embedded images pinned =="
+# From `crio config`, the merged drop-ins: catches a list replaced by a later
+# drop-in, a sed that matched nothing, and an upstream that moved registry.
+cfg=$(crio config) || fail "crio config failed; its stderr is above"
+mapfile -t pins < <(sed -n '/^[[:space:]]*pinned_images = \[/,/^[[:space:]]*\]/s/^[[:space:]]*"\(.*\)",$/\1/p' <<<"$cfg")
+(( ${#pins[@]} )) || fail "crio config pins no images:" \
+	"$(grep -n -A8 'pinned_images' <<<"$cfg")"
+# CRI-O's three pattern forms: *keyword*, prefix* and exact.
+pinned() {
+	local p
+	for p in "${pins[@]}"; do
+		case $p in
+		\**\*) [[ $1 == *"${p:1:${#p}-2}"* ]] ;;
+		*\*) [[ $1 == "${p%\*}"* ]] ;;
+		*) [[ $1 == "$p" ]] ;;
+		esac && return 0
+	done
+	return 1
+}
+unpinned=()
+while IFS=, read -r img sha; do
+	pinned "$img" || unpinned+=("$img")
+done < "$cache/mapping.txt"
+(( ${#unpinned[@]} == 0 )) || fail "embedded but not pinned by crio config" \
+	"(${pins[*]}), so kubelet may delete them: ${unpinned[*]}"
+echo "   pinned: ${pins[*]}"
+
 echo "all checks passed"
