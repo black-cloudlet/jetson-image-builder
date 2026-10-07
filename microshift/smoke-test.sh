@@ -50,6 +50,14 @@ node=$(awk '$1 == "nodeIP:" { print $2 }' /etc/microshift/config.d/*.yaml)
 	|| fail "lo carries '$lo' ($nm) but nodeIP is '$node' (/etc/microshift/config.d)"
 echo "   nodeIP $node is on lo"
 
+echo "== split dns =="
+# dns=dnsmasq and the kubelet resolvConf are separate files; either alone breaks pod DNS.
+mode=$(NetworkManager --print-config | awk -F= '$1 == "dns" { print $2 }')
+[[ $mode == dnsmasq ]] || fail "NetworkManager dns is '$mode', expected dnsmasq"
+rc=$(awk '$1 == "resolvConf:" { print $2 }' /etc/microshift/config.d/*.yaml)
+[[ $rc == /run/NetworkManager/no-stub-resolv.conf ]] && grep -qaF "$rc" /usr/sbin/NetworkManager \
+	|| fail "kubelet resolvConf '$rc' (/etc/microshift/config.d) is not a file NetworkManager writes"
+
 echo "== nvidia runtime for cri-o =="
 # nvidia-ctk renames a .conf drop-in to .toml and still exits 0, so only a check
 # spelling the name notices.
