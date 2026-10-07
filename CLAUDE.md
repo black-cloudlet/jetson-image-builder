@@ -302,10 +302,13 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `bootc container lint`; layer count is a `::notice`, per-layer sizes go to the log. Why:
   a plain build stamps every layer with the build's mtimes, so an unchanged rebuild gets new
   digests and a node or mirror re-fetches everything. Rechunked, `services` shares no blobs
-  with the layers below. Dispatched once (run 33): it runs nested in the UBI container and
-  takes ~7.5 min (683 packages, 46615 objects, 3.85 GB of RPM content). Still unverified: the
-  lint and smoke test on its output, its disk headroom, how it groups the embedded images (no
-  RPM owns them), and whether two builds of unchanged content really share digests.
+  with the layers below. Run 36 went green end to end, ISO included: ~6.5 min nested in the UBI
+  container (683 packages, 46615 objects, 3.85 GB of RPM content), 65 layers, lint and smoke
+  test pass on the output, 88 GB still free, 9506 MiB image. But one layer,
+  `rpmostree-unpackaged-content and initramfs`, is **6.35 GB**: the whole image cache (5.7 GB,
+  17 images) and every other file no RPM owns, rpmdb and `/etc` edits included. So only the
+  ~3 GB of RPM content splits per package; the big layer most likely changes on every build.
+  Still unverified: whether two builds of unchanged content share any digests.
   **What a node follows is not settled.** bib installs the services layer pinned by digest
   from GHCR, so `bootc upgrade` has nothing to re-resolve and could not reach it anyway.
   `ostreecontainer` has no `--target-imgref`. Pointing the origin at the air-gapped `stable`
