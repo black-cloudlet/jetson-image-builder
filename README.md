@@ -299,21 +299,13 @@ restored into the container store at boot:
    longer names, because nothing else would prune them except kubelet's image garbage
    collection at 85% disk, which would delete exactly the images the node cannot re-pull. It
    does not wait for the network: the copy is local.
-3. **Pinned.** Kubelet deletes unused images at 85% disk, and every unused image at once when
-   the disk is under pressure. An embedded image that no pod happens to be using (Triton before
-   any InferenceService exists) would then be gone until the next boot. CRI-O's
-   `pinned_images` exempts an image from both, and `20-pinned-images.conf` pins the registries
-   the layers embed from: `microshift/` ships `quay.io`, `registry.redhat.io` and `nvcr.io`,
-   and `services/` appends `docker.io` and `oci.external-secrets.io`. Upgrades still remove what
-   a new OS drops, because `podman rmi` does not read CRI-O pins.
-   - **One list.** A second CRI-O drop-in that sets `pinned_images` replaces the list rather
-     than adding to it, so a later layer appends a line to this file.
-   - **Never pin what the node pulls.** A pulled image matching a pattern can be deleted by
-     neither kubelet nor the boot-time prune, so every old version stays. Push images an
-     application layer embeds under a path that pulled images never use, and pin only that
-     (`registry.example/embedded/*`, not `registry.example/*`). Do not mirror a pinned registry
-     in `registries.conf`: a mirrored pull is stored under the original name.
-   - The smoke tests fail when `crio config` leaves any embedded image unpinned.
+3. **Pinned.** `20-pinned-images.conf` pins the embedded images' registries in CRI-O, so
+   kubelet's image garbage collection never deletes one (an unused Triton would otherwise be
+   gone until the next boot). Upgrades still remove what a new OS drops: `podman rmi` ignores
+   CRI-O pins. `services/` appends its registries to the same file, because a second drop-in
+   would replace the list. Never pin an image the node pulls, or nothing ever deletes it:
+   pin `registry.example/embedded/*`, not `registry.example/*`, and do not mirror a pinned
+   registry in `registries.conf`. The smoke tests fail on any embedded image left unpinned.
 
 The image list is **derived, not maintained**. Each layer renders its own manifests with
 `microshift/manifest-images.sh` and embeds whatever `image:` fields they contain, so the pinned
@@ -575,9 +567,8 @@ sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfi
 `services/manifests/` with a `kustomization.yaml`. The build embeds whatever images it renders.
 Give every container requests and limits at the house ratios, keep it admissible under
 `restricted-v2`, and add its workloads to the smoke test's expected set. Images named outside an
-`image:` field, such as a model's `oci://` image, go in `SERVICE_IMAGES`. An image from a registry not yet
-pinned needs its prefix appended to `20-pinned-images.conf` (the `sed` in `services/Containerfile`);
-the smoke test names it otherwise.
+`image:` field, such as a model's `oci://` image, go in `SERVICE_IMAGES`. A new registry goes in
+the `sed` in `services/Containerfile`, or the smoke test fails.
 
 **A variant:** create `<name>/` with a `Containerfile` (`FROM` bound-images via
 `ARG BASE_IMAGE`), a `config.toml` and a `smoke-test.sh`. Then copy `build-microshift.yml` and
