@@ -323,8 +323,8 @@ Seven images come from the services layer today: cert-manager ×3, External Secr
 | `.github/workflows/build-microshift.yml` | caller | chains them: `base` → `bound_images` → `microshift` → `services` → `iso` |
 
 `build-microshift.yml` runs on **push to `main`** that touches `base/`, `microshift/`,
-`services/` or the workflows, and on **manual dispatch** (`workflow_dispatch`). **Nothing runs
-on a pull request**: to validate a branch, dispatch the workflow against it from the Actions tab.
+`services/`, `config.toml` or the workflows, and on **manual dispatch** (`workflow_dispatch`).
+**Nothing runs on a pull request**: to validate a branch, dispatch the workflow against it from the Actions tab.
 
 ### Where it runs
 
@@ -365,7 +365,7 @@ Every layer is published under these tags, all naming the same manifest:
 ### The ISO (`build-iso.yml`)
 
 1. Register, move storage onto `/scratch`, log in to GHCR and `registry.redhat.io`.
-2. Render `microshift/config.toml`, substituting `@JETSON_SSH_PUBKEY@` and
+2. Render `config.toml`, substituting `@JETSON_SSH_PUBKEY@` and
    `@JETSON_PASSWORD_HASH@` in bash (not `sed`, which breaks on `&`, quotes and newlines). It
    first rejects an empty value, a line break, a password that is not a `$6$…` crypt hash, and
    a key that is not an OpenSSH public key. Each of those would otherwise produce an ISO nobody
@@ -470,7 +470,7 @@ The address is **static and baked into the ISO**:
 | Timezone | `Asia/Jerusalem`, hardware clock in UTC |
 
 Every device imaged from one ISO gets the same address and hostname, so two on one segment
-collide. Change `microshift/config.toml` and rebuild per device, or fix it up after first boot.
+collide. Change `config.toml` and rebuild per device, or fix it up after first boot.
 
 ### Reaching the cluster from another machine
 
@@ -545,7 +545,7 @@ sudo podman run --rm -i localhost/jetson-orin-bootc-services:dev bash -s < servi
 
 # ISO
 sed -e "s|@JETSON_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
-    -e "s|@JETSON_PASSWORD_HASH@|$(openssl passwd -6)|" microshift/config.toml > /tmp/config.toml
+    -e "s|@JETSON_PASSWORD_HASH@|$(openssl passwd -6)|" config.toml > /tmp/config.toml
 mkdir -p output
 sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfined_t \
   -v /tmp/config.toml:/config.toml:ro -v ./output:/output \
@@ -565,7 +565,7 @@ Give every container requests and limits at the house ratios, keep it admissible
 the `sed` in `services/Containerfile`, or the smoke test fails.
 
 **A variant:** create `<name>/` with a `Containerfile` (`FROM` bound-images via
-`ARG BASE_IMAGE`), a `config.toml` and a `smoke-test.sh`. Then copy `build-microshift.yml` and
+`ARG BASE_IMAGE`) and a `smoke-test.sh`. Then copy `build-microshift.yml` and
 point its variant and `iso` jobs at it. `base` and `bound_images` are reused unchanged.
 
 ## Not settled yet
@@ -592,6 +592,7 @@ The design record, with every decision and why, is `CLAUDE.md`.
 
 | Path | What it is |
 |---|---|
+| `config.toml` | installer config: the kickstart, ISO label, boot menu timeout |
 | `base/Containerfile.base` | layer 1: the pinned JetPack-for-RHEL image, republished |
 | `base/smoke-test.base.sh` | checks the vendor image is what we expect |
 | `base/Containerfile.podman` | layer 2: embedding machinery + jtop + Edge Manager agent |
@@ -605,7 +606,6 @@ The design record, with every decision and why, is `CLAUDE.md`.
 | `microshift/config.d/10-node-ip.yaml` | tells MicroShift to use it |
 | `microshift/crio.conf.d/20-pinned-images.conf` | CRI-O pins: kubelet never deletes an embedded image |
 | `microshift/manifest-images.sh` | renders manifest roots, prints every image they name |
-| `microshift/config.toml` | installer config: the kickstart, ISO label, boot menu timeout |
 | `microshift/smoke-test.sh` | checks for the microshift layer |
 | `services/Containerfile` | layer 4: the manifest roots, upstream installs, their images |
 | `services/manifests/0x0-*/` | one kustomize root per service, applied by MicroShift in order |

@@ -13,7 +13,7 @@ on:
         type: string
         required: true
       config:
-        description: path to the variant's bootc-image-builder config.toml
+        description: path to the bootc-image-builder config.toml
         type: string
         required: true
       name:

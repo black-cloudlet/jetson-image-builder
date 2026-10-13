@@ -11,6 +11,7 @@ on:
       - base/**
       - microshift/**
       - services/**
+      - config.toml
       - .github/workflows/build-microshift.yml
       - .github/workflows/build-image.yml
       - .github/workflows/build-iso.yml
@@ -81,14 +82,14 @@ jobs:
     secrets: inherit
     permissions: { contents: read, packages: write }
 
-  # The ISO is still the microshift variant's: config.toml and the artifact name
-  # belong to the variant, the image installed is the top of its chain.
+  # The installer config is project-wide; the image installed is the top of the
+  # chain.
   iso:
     needs: services
     uses: ./.github/workflows/build-iso.yml
     with:
       image-ref: ${{ needs.services.outputs.image-ref }}
-      config: microshift/config.toml
+      config: config.toml
       name: microshift
       tag: ${{ needs.services.outputs.tag }}
     secrets: inherit

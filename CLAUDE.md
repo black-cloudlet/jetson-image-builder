@@ -255,7 +255,7 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `du -sh` of the cache, which the eMMC pays for twice (`/usr` and containers-storage). Pods
   KServe builds at run time are in no render: their admission and GPU access are hardware
   questions.
-- `microshift/config.toml` — bib config with a **custom kickstart** (bib then adds only
+- `config.toml` — project-wide bib config with a **custom kickstart** (bib then adds only
   `ostreecontainer`; `[customizations.user]`/`filesystem` cannot be combined with it):
   `text --non-interactive`, `timezone Asia/Jerusalem --utc`, static `192.168.1.10/24` gw
   `192.168.1.254` on `eth0`, `--nameserver=192.168.1.1` (must answer, or every lookup waits out
@@ -312,7 +312,7 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   the `*.iso` alone (no checksum file) at zip `compression-level: 9`, the maintainer's call; it is
   mostly gzip'd layers and squashfs, so the saving is small and the upload slower.
 - `.github/workflows/build-microshift.yml` — the only caller, on push to `main` under
-  `base/**`, `microshift/**`, `services/**` or the workflows, and on `workflow_dispatch`.
+  `base/**`, `microshift/**`, `services/**`, `config.toml` or the workflows, and on `workflow_dispatch`.
   **Nothing runs on a pull request.**
 
 **Secrets**: `RH_REGISTRY_USER`/`RH_REGISTRY_PASSWORD` (bib pull), `RHSM_USERNAME`/`RHSM_PASSWORD`
@@ -459,7 +459,7 @@ podman run --rm -i localhost/jetson-orin-bootc:dev bash -s < services/smoke-test
 # ISO from the top of the chain
 sed -e "s|@JETSON_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
     -e "s|@JETSON_PASSWORD_HASH@|$(openssl passwd -6)|" \
-    microshift/config.toml > /tmp/config.toml
+    config.toml > /tmp/config.toml
 sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfined_t \
   -v /tmp/config.toml:/config.toml:ro -v ./output:/output \
   -v /var/lib/containers/storage:/var/lib/containers/storage \
