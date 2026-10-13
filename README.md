@@ -61,7 +61,7 @@ upgrade (see [Storage layout](#storage-layout)).
 | Base image | Red Hat's JetPack-for-RHEL bootc image, pinned: `quay.io/redhat-user-workloads/jetpack-for-rhel-tenant/rhel-98-bootc:6.2.2_5.14.0-687.42.1_090326003719` |
 | JetPack / L4T | JetPack 6.2.2, L4T **r36.5.0**, kernel `5.14.0-687.42.1.el9_8` |
 | GPU integration | Ships in the base image: the Tegra kernel modules, `nvidia-container-toolkit`, CDI (`/etc/cdi/nvidia.yaml` generated at boot) |
-| Kubernetes | MicroShift 4.20. A k3s variant is still in the tree, but nothing builds it |
+| Kubernetes | MicroShift 4.20 |
 | Boot firmware | Flashed separately onto the Jetson's QSPI from a Jetson Linux **R36.5.x** BSP, which must match the image's L4T line |
 
 ### Three machines, three roles
@@ -275,17 +275,6 @@ render to JSON and queries it with `jq`, then checks:
 - every resource ratio;
 - every image registry-qualified and embedded;
 - no `ClusterStorageContainer`, and one KServe version throughout.
-
-### k3s: in the tree, built by nothing
-
-`k3s/` holds a second variant: k3s as a static binary, `k3s-selinux`, the same firewall rules, the
-NVIDIA runtime as containerd's default, and its images as tarballs staged into k3s's image
-directory at boot by `k3s-stage-assets.service`. Its kickstart grows the root over the whole disk
-(k3s stores volumes on the root filesystem) and uses the ISO label `JETSON_ORIN_K3S`.
-
-Its caller workflow was deleted, so nothing builds it. It would reuse both shared layers but have
-no services layer: `services/` writes to MicroShift's manifest directory and embeds into podman's
-container store, and k3s reads neither.
 
 ## How a node runs with no registry
 
@@ -577,8 +566,7 @@ the `sed` in `services/Containerfile`, or the smoke test fails.
 
 **A variant:** create `<name>/` with a `Containerfile` (`FROM` bound-images via
 `ARG BASE_IMAGE`), a `config.toml` and a `smoke-test.sh`. Then copy `build-microshift.yml` and
-point its variant and `iso` jobs at it. `base` and `bound_images` are reused unchanged. That is
-also how k3s would come back.
+point its variant and `iso` jobs at it. `base` and `bound_images` are reused unchanged.
 
 ## Not settled yet
 
@@ -622,7 +610,6 @@ The design record, with every decision and why, is `CLAUDE.md`.
 | `services/Containerfile` | layer 4: the manifest roots, upstream installs, their images |
 | `services/manifests/0x0-*/` | one kustomize root per service, applied by MicroShift in order |
 | `services/smoke-test.sh` | render, admission, resource and image checks |
-| `k3s/` | the k3s variant, built by nothing |
 | `.github/workflows/build-image.yml` | reusable: build, test and push one layer |
 | `.github/workflows/build-iso.yml` | reusable: build the installer ISO |
 | `.github/workflows/build-microshift.yml` | the pipeline: base → bound-images → microshift → services → ISO |

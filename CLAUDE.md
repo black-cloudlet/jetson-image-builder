@@ -3,7 +3,7 @@
 Provisioning and image pipeline for NVIDIA Jetson AGX Orin edge nodes running RHEL image mode
 (bootc) in a disconnected environment. Read this whole file before touching anything.
 
-**Two repos.** This one holds the image pipeline (`base/`, `microshift/`, `services/`, `k3s/`,
+**Two repos.** This one holds the image pipeline (`base/`, `microshift/`, `services/`,
 `.github/workflows/`). The flashing-station tooling (`mirror.sh`, `install-offline.sh`, the
 station-side flashing docs) lives in `black-cloudlet/jetson-installer-config`: different job,
 different machines. This file describes both because they must agree on the L4T line, but only
@@ -17,8 +17,8 @@ maintenance, upgrades and deployments. Nothing on a device or the flashing stati
 reaches the internet.
 
 - RHEL 9.8 image mode (bootc), aarch64
-- **MicroShift 4.20** is the only variant that builds. `k3s/` is still in the tree but nothing
-  builds it: `build-k3s.yml` was deleted
+- **MicroShift 4.20** is the only variant. A k3s variant was built by nothing and removed; it
+  is in git history
 - On the cluster: cert-manager, External Secrets, KServe (Standard mode) and a Triton
   `ClusterServingRuntime`, from `services/`. Still to come: PostgreSQL, RabbitMQ, the first
   `InferenceService`
@@ -112,8 +112,6 @@ only. KServe was removed once before (`bba9d10`, reason unrecorded).
    workflows (`build-image.yml`, `build-iso.yml`) plus `build-microshift.yml`, chaining base →
    bound-images → microshift → services → ISO. The build context is the repo root. Every layer
    registers with subscription-manager, even the one that installs nothing: one code path.
-   `k3s/` would reuse both shared layers, but it has no services layer: `services/` embeds into
-   podman's containers-storage and writes `/etc/microshift/manifests.d`, and k3s reads neither.
 8. **NVIDIA BSP download stays manual** (documented in `README.md`). Scripting it was fragile.
 
 ## What is done and working
@@ -257,15 +255,6 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `du -sh` of the cache, which the eMMC pays for twice (`/usr` and containers-storage). Pods
   KServe builds at run time are in no render: their admission and GPU access are hardware
   questions.
-- `k3s/` — `Containerfile`, `config.toml`, `stage-assets.sh`, `smoke-test.sh`, **built by
-  nothing**. k3s (`K3S_VERSION`) as the static binary in `/usr/bin` with argv[0] symlinks
-  (`/usr/local` is machine state, so the install script is unusable); `k3s-selinux` from
-  Rancher's repo, whose repo file is removed in the same layer; matching firewall rules;
-  `default-runtime: nvidia` in `/etc/rancher/k3s/config.yaml` (a non-default runtime needs a
-  RuntimeClass); the airgap image tarball plus the device plugin as a `docker-archive`,
-  staged by `k3s-stage-assets.service`. Its kickstart grows root over the whole VG
-  (local-path lives on root) and uses label `JETSON_ORIN_K3S` (anaconda finds stage2 by label).
-  `embed_image.sh`'s cache is useless here: containerd does not read containers-storage.
 - `microshift/config.toml` — bib config with a **custom kickstart** (bib then adds only
   `ostreecontainer`; `[customizations.user]`/`filesystem` cannot be combined with it):
   `text --non-interactive`, `timezone Asia/Jerusalem --utc`, static `192.168.1.10/24` gw
@@ -368,21 +357,18 @@ hardware.
    /dev/nvhost-ctrl-gpu /dev/nvmap`; if `root:video 0660`, add `supplementalGroups` on the
    InferenceService or CRI-O's `device_ownership_from_security_context`). Then `oci://` with an
    embedded modelcar image, proving the `uidModelcar` change.
-6. k3s: revive only by writing `build-k3s.yml`, then check it runs enforcing, images staged
-   first, the airgap set present with no registry, and a GPU pod on the default runtime.
-7. Later layers `FROM` the k8s image: a `bootc switch` unit for the air-gapped registry,
+6. Later layers `FROM` the k8s image: a `bootc switch` unit for the air-gapped registry,
    greenboot health checks, a signature policy in `/etc/containers/policy.json`.
 
 **Open decisions** (confirm with the maintainer first): the Triton `-igpu` tag for JetPack
 6.2.2 and the 8Gi slice size; where InferenceServices live, and whether models get their own
 layer above `services/`; what External Secrets reads from; NVMe before real apps land;
 registration vs. a self-hosted runner; per-device address and hostname before a second node;
-opening the k3s kubeconfig to `cloudlet`; how `/etc/flightctl/config.yaml` reaches a node, and
-greenboot; whether k3s comes back, and how service images would reach containerd without
-doubling `/usr`; `bootc switch` vs. retag for the node's origin, and
-whether `stable` moves on every green build or only after a hardware boot; lowering kubelet's
-image GC thresholds below the eviction line (only matters once images are pulled); whether the
-`services/` resource sizes survive hardware (the ratios are enforced, the sizes are guesses).
+how `/etc/flightctl/config.yaml` reaches a node, and greenboot; `bootc switch` vs. retag for the
+node's origin, and whether `stable` moves on every green build or only after a hardware boot;
+lowering kubelet's image GC thresholds below the eviction line (only matters once images are
+pulled); whether the `services/` resource sizes survive hardware (the ratios are enforced, the
+sizes are guesses).
 
 ## How to work in this repo
 
@@ -486,9 +472,4 @@ cat /etc/nv_tegra_release      # R36 REVISION 5.0
 lsmod | grep nvgpu
 systemctl status nvidia-ctk && nvidia-ctk cdi list   # expect nvidia.com/gpu=all
 bootc status
-
-# On a k3s node (nothing builds this variant — build-k3s.yml was deleted)
-systemctl status k3s-stage-assets k3s
-k3s ctr images ls | grep -c .        # airgap set + device plugin, imported with no registry
-k3s kubectl get nodes -o jsonpath='{.items[0].status.allocatable}'   # expect nvidia.com/gpu
 ```
