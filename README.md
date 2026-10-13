@@ -294,8 +294,8 @@ restored into the container store at boot:
 3. **Pinned.** `20-pinned-images.conf` pins the embedded images' registries in CRI-O, so
    kubelet's image garbage collection never deletes one (an unused Triton would otherwise be
    gone until the next boot). Upgrades still remove what a new OS drops: `podman rmi` ignores
-   CRI-O pins. `services/` appends its registries to the same file, because a second drop-in
-   would replace the list. Never pin an image the node pulls, or nothing ever deletes it:
+   CRI-O pins. It is the one list for every layer, `services/` included, because a second
+   drop-in would replace it. Never pin an image the node pulls, or nothing ever deletes it:
    pin `registry.example/embedded/*`, not `registry.example/*`, and do not mirror a pinned
    registry in `registries.conf`. The smoke tests fail on any embedded image left unpinned.
 
@@ -550,7 +550,7 @@ sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfi
 Give every container requests and limits at the house ratios, keep it admissible under
 `restricted-v2`, and add its workloads to the smoke test's expected set. Images named outside an
 `image:` field, such as a model's `oci://` image, go in `SERVICE_IMAGES`. A new registry goes in
-the `sed` in `services/Containerfile`, or the smoke test fails.
+`microshift/crio.conf.d/20-pinned-images.conf`, or the smoke test fails.
 
 **A variant:** create `<name>/` with a `Containerfile` (`FROM` bound-images via
 `ARG BASE_IMAGE`) and a `smoke-test.sh`. Then copy `build-microshift.yml` and

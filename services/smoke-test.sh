@@ -304,7 +304,7 @@ du -sh "$cache"
 
 echo "== embedded images pinned =="
 # From `crio config`, the merged drop-ins: catches a list replaced by a later
-# drop-in, a sed that matched nothing, and an upstream that moved registry.
+# drop-in, a registry missing from it, and an upstream that moved registry.
 cfg=$(crio config) || fail "crio config failed; its stderr is above"
 mapfile -t pins < <(sed -n '/^[[:space:]]*pinned_images = \[/,/^[[:space:]]*\]/s/^[[:space:]]*"\(.*\)",$/\1/p' <<<"$cfg")
 (( ${#pins[@]} )) || fail "crio config pins no images:" \

@@ -166,8 +166,9 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   - **Pinned in CRI-O** (`microshift/crio.conf.d/20-pinned-images.conf`): kubelet's image GC
     and disk-pressure reclaim skip embedded images (an unused Triton would otherwise be gone
     until the next boot); the prune still removes them, since podman ignores CRI-O pins.
-    Registry prefixes; `services/` appends `docker.io/*` and `oci.external-secrets.io/*` with
-    `sed`. **One list**: a second drop-in replaces it. **Never pin a pulled image**: nothing
+    Registry prefixes for every layer (`docker.io`, `nvcr.io`, `oci.external-secrets.io`,
+    `quay.io`, `registry.redhat.io`), `services/` included. **One list**: a second drop-in
+    replaces it, so a new registry goes in this file. **Never pin a pulled image**: nothing
     would delete it. So no `registries.conf` mirror for a pinned registry, and air-gapped app
     layers embed from `<registry>/embedded/*`, pull from `<registry>/apps/*`. Both smoke tests
     check every `mapping.txt` reference against `crio config`. GC thresholds are untouched.
