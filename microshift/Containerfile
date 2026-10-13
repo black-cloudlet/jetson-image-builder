@@ -30,7 +30,7 @@ COPY --chmod=0600 microshift/stable-microshift.nmconnection \
 COPY microshift/config.d/ /etc/microshift/config.d/
 
 # Split DNS: cluster.local to CoreDNS (10.43.0.10, the 10th address of
-# serviceNetwork), the rest as before. Kubelet half: 30-kubelet-resolv-conf.yaml.
+# serviceNetwork), the rest as before. Kubelet half: 20-kubelet-resolv-conf.yaml.
 COPY <<'EOF' /usr/lib/NetworkManager/conf.d/50-dnsmasq.conf
 [main]
 dns=dnsmasq

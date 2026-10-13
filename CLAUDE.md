@@ -268,12 +268,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   cluster has no dynamic PVs). Root locked; user `cloudlet` in `wheel` from
   `@JETSON_SSH_PUBKEY@`/`@JETSON_PASSWORD_HASH@`; `reboot --eject`. ISO label
   `JETSON_ORIN_BOOTC`. Address and hostname are baked in, so two devices from
-  one ISO collide. A `%post` writes `10.44.0.1 jetson-1.cloudlet.local jetson-1` into
-  `/etc/hosts` and `/etc/microshift/config.d/20-subject-alt-names.yaml` with
-  `jetson-1.cloudlet.local` as the only extra SAN. The laptop reaches 6443 by name (needs an A
-  record on 192.168.1.1) with
-  `/var/lib/microshift/resources/kubeadmin/jetson-1.cloudlet.local/kubeconfig`. bib appends our
-  kickstart verbatim, so a trailing `%post … %end` works.
+  one ISO collide. No `%post`: the extra API SAN and the `/etc/hosts` entry were removed, so
+  the laptop reaches 6443 through an SSH tunnel with the loopback kubeconfig.
 - **Node IP on `lo`** (`microshift/stable-microshift.nmconnection`,
   `microshift/config.d/10-node-ip.yaml`) — Red Hat's fully-disconnected procedure. Without
   `nodeIP`, MicroShift uses the default-route address and `sysconfwatch` restarts it whenever
@@ -286,7 +282,7 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
 - **Split DNS** — NM's `dns=dnsmasq` plus `server=/cluster.local/10.43.0.10` (CoreDNS) lets
   the node resolve full `<svc>.<ns>.svc.cluster.local` names. dnsmasq, not systemd-resolved
   (Tech Preview on RHEL 9). `/etc/resolv.conf` becomes `127.0.0.1`, so
-  `config.d/30-kubelet-resolv-conf.yaml` points kubelet (and so CoreDNS's upstream) at
+  `config.d/20-kubelet-resolv-conf.yaml` points kubelet (and so CoreDNS's upstream) at
   `/run/NetworkManager/no-stub-resolv.conf`. Unverified on hardware.
 - `.github/workflows/build-image.yml` — **reusable**: register, bind storage for native
   overlay, write the pull secret, build, run the smoke test inside the result, push

@@ -474,24 +474,12 @@ collide. Change `config.toml` and rebuild per device, or fix it up after first b
 
 ### Reaching the cluster from another machine
 
-The kickstart's `%post` adds `jetson-1.cloudlet.local` to the API server's certificate and maps
-it to `10.44.0.1` in the node's own `/etc/hosts`. MicroShift writes a kubeconfig for that name,
-whose `server:` is `https://jetson-1.cloudlet.local:6443`. From a laptop on the air-gapped
-network:
-
-1. Make `jetson-1.cloudlet.local` resolve to `192.168.1.10`: an A record on `192.168.1.1`, or a
-   line in the laptop's `/etc/hosts`.
-2. Copy the kubeconfig off the node:
-   ```bash
-   ssh cloudlet@192.168.1.10 \
-     sudo cat /var/lib/microshift/resources/kubeadmin/jetson-1.cloudlet.local/kubeconfig > ~/.kube/jetson
-   KUBECONFIG=~/.kube/jetson oc get pods -A
-   ```
-
-With no DNS change at all, tunnel instead and use the node's loopback kubeconfig:
+The API server's certificate carries no extra name, so from a laptop on the air-gapped network
+tunnel to the node and use its loopback kubeconfig:
 ```bash
 ssh -N -L 6443:127.0.0.1:6443 cloudlet@192.168.1.10 &
 ssh cloudlet@192.168.1.10 sudo cat /var/lib/microshift/resources/kubeadmin/kubeconfig > ~/.kube/jetson
+KUBECONFIG=~/.kube/jetson oc get pods -A
 ```
 
 The kubeconfig holds a client certificate: whoever has the file is cluster-admin. The `oc` client
