@@ -3,7 +3,8 @@
 #   podman run --rm -i "$IMAGE:$TAG" bash -s < kiosk/smoke-test.sh
 #
 # Proves the pieces agree with each other. Whether a picture leaves the DP port
-# is a hardware question.
+# is a hardware question, and so is whether the GPU draws it: no display
+# driver is loaded in a container.
 set -euo pipefail
 
 fail() { echo "$*"; exit 1; }
@@ -38,6 +39,34 @@ grep -q '.local/bin/gnome-kiosk-script' "$(command -v gnome-kiosk-script)" \
 for cmd in firefox curl; do
 	command -v "$cmd" || fail "not on PATH: $cmd"
 done
+
+echo "== GPU path =="
+groups=$(id -nG "$user")
+[[ " $groups " == *" video "* ]] \
+	|| fail "$user is not in video ($groups): it cannot open NVIDIA's GPU nodes"
+
+# A gdm update can add or rename a rule that turns Wayland off on NVIDIA; every
+# rule file that can do it must be masked.
+for rule in $(grep -l 'WaylandEnable false' /usr/lib/udev/rules.d/*.rules); do
+	[[ $(readlink "/etc/udev/rules.d/${rule##*/}") == /dev/null ]] || {
+		echo "$rule can turn Wayland off on NVIDIA, and /etc/udev/rules.d does not mask it:"
+		ls -la /etc/udev/rules.d
+		exit 1
+	}
+done
+
+# What GNOME Kiosk and Firefox draw through, all from the vendor image and
+# checked nowhere else: a base bump that drops one leaves no GPU path. -e
+# follows links, so a dangling one fails.
+for f in /usr/share/glvnd/egl_vendor.d/10_nvidia.json \
+	/usr/lib64/gbm/nvidia-drm_gbm.so \
+	/usr/share/egl/egl_external_platform.d/nvidia_gbm.json \
+	/usr/share/egl/egl_external_platform.d/nvidia_wayland.json \
+	/etc/systemd/system/graphical.target.wants/load-nvidia-drm.service; do
+	[[ -e $f ]] || { echo "missing: $f"; ls -la "${f%/*}"; exit 1; }
+done
+grep -rqsx 'options nvidia-drm .*modeset=1.*' /etc/modprobe.d /usr/lib/modprobe.d \
+	|| fail "no modprobe.d file sets nvidia-drm modeset=1: no KMS for the compositor"
 
 echo "== firefox policies =="
 # A policies.json that does not parse is ignored whole, silently.

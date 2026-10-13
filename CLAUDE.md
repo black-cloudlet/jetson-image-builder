@@ -25,7 +25,9 @@ reaches the internet.
 - Every container image physically bound into the OS image (zero network at first boot)
 - A kiosk: a monitor on the Jetson's DisplayPort shows the frontend in Firefox, fullscreen. It
   must be on the Jetson itself (maintainer's requirement; a separate display box was offered and
-  declined), and it stays Red Hat's documented setup, nothing custom (maintainer's call)
+  declined), and it stays Red Hat's documented setup, nothing custom (maintainer's call). It
+  draws on the GPU (maintainer's call: live video composited on the CPU costs cores the pods
+  need), unmetered against Triton.
 
 **Model serving is upstream KServe, not Red Hat's**: `microshift-ai-model-serving` is x86_64
 only. KServe was removed once before (`bba9d10`, reason unrecorded).
@@ -194,7 +196,24 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `firefox --kiosk` in the background and kill it after 10 s without a monitor, then restart
   after 1 s, or with back-off (2, 4 … 60 s) when Firefox died on its own within a minute. A
   `while` loop rather than the template's `exec "$0"`, so the back-off survives a restart.
-  Rendering is the defaults: GPU where the drivers allow, unmetered against Triton.
+  - **GPU**: the vendor image carries the whole path (checked in the layer on 2026-10-13 by
+    listing the pinned tag's layers): `nvidia-drm.ko` with `modeset=1 fbdev=1`
+    (`/etc/modprobe.d/nvidia-display.conf`), `load-nvidia-drm.service` enabled under
+    `graphical.target` (so it loads only now that the node boots graphical), glvnd's
+    `10_nvidia.json` → `tegra-egl/libEGL_nvidia.so.0`, `gbm/nvidia-drm_gbm.so`, and EGL external
+    platforms for GBM and Wayland. Three things here make it used:
+    - `/etc/udev/rules.d/61-gdm.rules` → `/dev/null`. RHEL 9's gdm 40.1 rule fires on the
+      `nvidia` module and turns Wayland off unless `nvidia-sleep.sh` and the
+      `nvidia-{suspend,resume,hibernate}` units exist; a Jetson has none, so GDM would refuse
+      the kiosk's Wayland session. Its other cases (virtual GPUs, hybrid laptops, `nomodeset`)
+      are not a Jetson's. The `nvidia_drm` part would pass (`modeset=Y`, version 540).
+    - `kiosk` is in `video` (`m` line in sysusers): the vendor's `99-tegra-devices.rules` makes
+      `nvmap`, `nvhost-*` and the `nvidia-gpu-v2` nodes `root:video 0660`, outside logind's
+      seat access.
+    - Firefox: `gfx.webrender.all` and `layers.acceleration.force-enabled` locked on. Its
+      blocklist picks per driver and Tegra's is not one it tests; if GL fails to start it still
+      falls back to software. Video **decode** stays on the CPU: Firefox decodes in hardware
+      only through VA-API, which Tegra lacks.
   - `/etc/jetson-kiosk.conf`: `KIOSK_URL`, a **placeholder** (`http://jetson-1.cloudlet.local/`)
     until the frontend's Route host is known; nothing maps it since the kickstart's `/etc/hosts`
     line went, and the real name must resolve with the cable out. HTTPS needs the signing CA in
@@ -211,11 +230,14 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     Wayland compositor and a smoke test requiring NVIDIA's EGL/GBM (`a4607a1`). Go back to one
     only for a measured reason. The CPU-only variant (Xorg `modesetting`, no acceleration,
     custom service) is kept as branch `claude/kiosk-xorg-cpu` (`9ba1b12`): the fallback if GDM
-    refuses Wayland on NVIDIA or GNOME will not start on the Jetson's display stack.
+    will not run GNOME on the Jetson's display stack (GDM's Wayland refusal is masked now).
   - Smoke test: default target `graphical.target` and `display-manager.service` → gdm; then it
     runs `systemd-sysusers` and `systemd-tmpfiles --create` in the throwaway test container, as
     a boot would, and checks GDM's autologin user exists, the AccountsService session names an
-    installed `wayland-sessions` file, the linked script is executable and parses,
+    installed `wayland-sessions` file, the linked script is executable and parses, `kiosk` is
+    in `video`, every `/usr/lib/udev/rules.d` file that can write `WaylandEnable false` is
+    masked, the vendor's EGL vendor file, GBM backend, both EGL platforms, the enabled
+    `load-nvidia-drm.service` and a `modeset=1` option exist (links followed),
     `gnome-kiosk-script` still execs `~/.local/bin/gnome-kiosk-script`, and the policy parses.
     Locally: sysusers/tmpfiles run against a scratch root (escapes expand, link lands), and the
     script against a fake DRM sysfs, stub Firefoxes and a local server: no monitor → nothing;
@@ -403,12 +425,15 @@ hardware.
    /dev/nvhost-ctrl-gpu /dev/nvmap`; if `root:video 0660`, add `supplementalGroups` on the
    InferenceService or CRI-O's `device_ownership_from_security_context`). Then `oci://` with an
    embedded modelcar image, proving the `uidModelcar` change.
-6. Kiosk, with a monitor on DP: `lsmod | grep -E 'nvidia_drm|nvidia_modeset'` and
-   `/dev/dri/card*` (no display driver = nothing shows; adding NVIDIA's display package is a
-   maintainer decision); GDM logs `kiosk` in and Firefox opens on the URL; replug the cable and
-   the picture returns; the screen does not blank; `ausearch -m avc` clean; `about:support` for
-   what Firefox draws with; `tegrastats` and Triton's p99 latency with the screen on and off.
-   If the frontend plays H.264, it is a black box.
+6. Kiosk, with a monitor on DP: `cat /sys/module/nvidia_drm/parameters/modeset` → `Y`;
+   `/run/gdm/custom.conf` absent (nothing turned Wayland off); `loginctl show-session <kiosk's>
+   -p Type` → `wayland`; the GPU in use: `for p in $(pgrep -u kiosk); do grep -q
+   libnvidia-eglcore /proc/$p/maps && cat /proc/$p/comm; done` names `gnome-kiosk` and Firefox's
+   GPU process. If GNOME Kiosk fails, check which DRM card it took (`tegra-drm` has no outputs;
+   `nvidia-drm` is the display). GDM logs `kiosk` in and Firefox opens on the URL; replug the
+   cable and the picture returns; the screen does not blank; `ausearch -m avc` clean;
+   `tegrastats` (GR3D) and Triton's p99 latency with the screen on and off. If the frontend
+   plays H.264, it is a black box.
 7. Later layers `FROM` the k8s image: a `bootc switch` unit for the air-gapped registry,
    greenboot health checks, a signature policy in `/etc/containers/policy.json`.
 

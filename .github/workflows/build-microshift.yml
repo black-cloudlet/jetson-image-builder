@@ -48,7 +48,7 @@ jobs:
     secrets: inherit
     permissions: { contents: read, packages: write }
 
-  # Firefox on the DisplayPort output, on the CPU only. Shared: nothing in it is
+  # Firefox on the DisplayPort output, drawn on the GPU. Shared: nothing in it is
   # about the cluster, so it sits below the variant and a service change never
   # reinstalls it.
   kiosk:

@@ -182,8 +182,21 @@ Red Hat's documented kiosk setup, nothing more:
 The kiosk user's home and the AccountsService file are in `/var`, so they come from
 `tmpfiles.d`, created at boot; anything put in `/var` at build time is not deployed.
 
-Drawing goes through GNOME Kiosk's and Firefox's defaults: the GPU where the drivers allow it.
-It runs outside Kubernetes, so the device plugin does not count it.
+**Drawn on the GPU.** Compositing live video on the CPU would cost cores the pods need. The vendor
+image already carries the display driver (`nvidia-drm`, loaded with `modeset=1` once the node
+boots graphical), NVIDIA's EGL and its GBM backend. Three things in this layer make GNOME Kiosk
+and Firefox use them:
+
+- GDM's `61-gdm.rules` is masked (`/etc/udev/rules.d/61-gdm.rules` → `/dev/null`). It turns
+  Wayland off whenever the `nvidia` module loads without NVIDIA's desktop suspend helpers, which
+  a Jetson does not have, and the kiosk session is Wayland.
+- The `kiosk` user is in `video`: NVIDIA's GPU device nodes are `root:video 0660`.
+- Firefox's hardware WebRender is forced on in its policy, past a blocklist that does not know
+  Tegra's driver. If GL fails to start it falls back to drawing on the CPU.
+
+Video decoding stays on the CPU: Firefox decodes in hardware only through VA-API, which Tegra
+does not have. The screen runs outside Kubernetes, so the device plugin does not count its GPU
+use against Triton.
 
 **Configuration.**
 - `/etc/jetson-kiosk.conf` holds `KIOSK_URL`. It is in `/etc` so one device can point elsewhere
@@ -202,7 +215,8 @@ reconnecting its own streams, since nobody can press reload.
 Its smoke test checks the node boots to GDM, then runs `systemd-sysusers` and
 `systemd-tmpfiles` inside the test container as a boot would, and checks the results agree: GDM's
 autologin user exists, the session it names is installed, the script is in place and parses, and
-the policy file parses.
+the policy file parses. It also checks the GPU path: `kiosk` is in `video`, GDM's Wayland rule is
+masked, and the vendor image still has NVIDIA's EGL, GBM backend and `nvidia-drm` setup.
 
 ### microshift: Kubernetes and the GPU
 
@@ -507,7 +521,11 @@ reboots ejecting the media.
    ```
    lsmod | grep -E 'nvidia_drm|nvidia_modeset'   # the display driver; without it nothing shows
    cat /sys/class/drm/card*-*/status             # flips to connected/disconnected with the cable
+   cat /sys/module/nvidia_drm/parameters/modeset # Y: KMS for the compositor
+   ls /run/gdm/custom.conf                       # absent: nothing turned Wayland off
    systemctl status gdm                          # the kiosk user's session under it
+   for p in $(pgrep -u kiosk); do grep -q libnvidia-eglcore /proc/$p/maps && cat /proc/$p/comm; done
+                                                 # gnome-kiosk and Firefox's GPU process: on the GPU
    tegrastats                                    # GR3D_FREQ: the screen's share of the GPU
    ```
 
@@ -655,7 +673,7 @@ The design record, with every decision and why, is `CLAUDE.md`.
 | `kiosk/Containerfile` | layer 3: GDM, GNOME Kiosk, Firefox |
 | `kiosk/gnome-kiosk-script` | waits for a monitor and the URL, runs Firefox, closes it on unplug, restarts it with back-off |
 | `kiosk/gdm-custom.conf` | GDM logs `kiosk` in automatically |
-| `kiosk/sysusers.conf`, `kiosk/tmpfiles.conf` | the `kiosk` user, its home and session |
+| `kiosk/sysusers.conf`, `kiosk/tmpfiles.conf` | the `kiosk` user (in `video`), its home and session |
 | `kiosk/jetson-kiosk.conf` | `KIOSK_URL` |
 | `kiosk/policies.json` | Firefox lockdown |
 | `kiosk/smoke-test.sh` | checks the layer is wired together |

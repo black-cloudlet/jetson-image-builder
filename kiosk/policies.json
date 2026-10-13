@@ -63,6 +63,14 @@
       "media.gmp-manager.updateEnabled": {
         "Value": false,
         "Status": "locked"
+      },
+      "gfx.webrender.all": {
+        "Value": true,
+        "Status": "locked"
+      },
+      "layers.acceleration.force-enabled": {
+        "Value": true,
+        "Status": "locked"
       }
     }
   }

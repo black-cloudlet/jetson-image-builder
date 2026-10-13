@@ -2,6 +2,10 @@
 # output. Red Hat's documented kiosk setup: GDM logs the kiosk user in, GNOME
 # Kiosk's script session starts, and the script opens Firefox. Below the
 # Kubernetes variant, because nothing here is about the cluster.
+#
+# Drawn on the GPU, the maintainer's call: live video composited on the CPU
+# costs cores the pods need. The GPU is Triton's too, and this runs outside
+# Kubernetes, where the device plugin's time slices cannot count it.
 ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-bound-images:latest
 FROM ${BASE_IMAGE}
 
@@ -19,6 +23,16 @@ COPY kiosk/sysusers.conf /usr/lib/sysusers.d/jetson-kiosk.conf
 COPY kiosk/tmpfiles.conf /usr/lib/tmpfiles.d/jetson-kiosk.conf
 COPY --chmod=0555 kiosk/gnome-kiosk-script /usr/libexec/jetson-kiosk/gnome-kiosk-script
 
+# The vendor image carries the whole GPU path: nvidia-drm with modeset=1,
+# load-nvidia-drm.service under graphical.target, NVIDIA's EGL, its GBM
+# backend, and EGL platforms for GBM and Wayland. What stands in the way is
+# GDM's 61-gdm.rules: when the nvidia module loads it turns Wayland off unless
+# NVIDIA's desktop suspend helpers (nvidia-sleep.sh, nvidia-suspend.service)
+# are installed, and a Jetson has none. GDM would then refuse the Wayland
+# session the kiosk user is set to. Masked whole: its other cases (virtual
+# GPUs, hybrid laptops, nomodeset) are not a Jetson's.
+RUN ln -s /dev/null /etc/udev/rules.d/61-gdm.rules
+
 # Log the kiosk user in at boot, with no login screen.
 COPY kiosk/gdm-custom.conf /etc/gdm/custom.conf
 
@@ -26,7 +40,10 @@ COPY kiosk/gdm-custom.conf /etc/gdm/custom.conf
 # safe browsing or OpenH264 download (all would try the internet), no disk
 # cache (eMMC writes), no crash-restore page, no file:// pages (a file picker
 # would otherwise browse the disk), and nothing a kiosk user could escape the
-# page with.
+# page with. Hardware WebRender and compositing are forced: Firefox picks them
+# per driver from a blocklist, and Tegra's is not a driver it tests. If GL
+# fails to start, Firefox still falls back to software; about:support says
+# which it got.
 COPY kiosk/policies.json /etc/firefox/policies/policies.json
 
 # /etc, so one device can point somewhere else without a rebuild.
