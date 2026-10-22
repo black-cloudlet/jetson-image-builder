@@ -6,9 +6,10 @@
 #
 # Three objects, in the order cert-manager needs them: a self-signed Issuer,
 # the CA Certificate it signs, and the ClusterIssuer that signs with the
-# result. After 040 rather than right after 010: the cert-manager webhook has
-# to be serving before any of these is admitted, and MicroShift's retry would
-# otherwise hold every later root while it starts. 060 copies the public half
+# result. Right after 010, whose CRDs and webhook it needs: the webhook
+# refuses these until it serves, so MicroShift retries this root and holds 020
+# behind it meanwhile. 030 already waits on that same webhook for KServe's own
+# Certificates, so nothing waits longer than before. 025 copies the public half
 # into every namespace.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

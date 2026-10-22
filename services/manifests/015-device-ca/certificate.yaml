@@ -1,7 +1,7 @@
 # The CA itself. In cert-manager, not anywhere else: a ClusterIssuer reads its
 # Secret from the controller's --cluster-resource-namespace, which upstream sets
 # to the namespace it runs in. The Secret holds tls.key, so nothing outside
-# that namespace may read it; 060 copies tls.crt alone.
+# that namespace may read it; 025 copies tls.crt alone.
 #
 # commonName is the same on every node: a manifest cannot know the hostname,
 # and the kickstart gives every node the same one until per-device addressing

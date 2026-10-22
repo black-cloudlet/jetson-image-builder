@@ -158,12 +158,12 @@ csc=$(jq -r '.[] | select(.kind == "ClusterStorageContainer") | .metadata.name' 
 echo "   no ClusterStorageContainer"
 
 echo "== device CA =="
-# 050 and 060 are written here, not upstream, so the risk is not drift but
+# 015 and 025 are written here, not upstream, so the risk is not drift but
 # disagreement: a name one root spells differently from another, or from
 # cert-manager, shows only on hardware, as a Certificate or ExternalSecret that
 # never goes Ready.
-ca=$render/050-device-ca.json
-bundle=$render/060-device-ca-bundle.json
+ca=$render/015-device-ca.json
+bundle=$render/025-device-ca-bundle.json
 # A ClusterIssuer reads its Secret from the controller's cluster resource
 # namespace, which upstream sets to the namespace it runs in.
 crn=$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "cert-manager")
@@ -249,7 +249,7 @@ out=$(jq -r '. as $all
 		then "\($o) reads \(.), which no ExternalSecret in \($k.remoteNamespace) writes"
 		else empty end)' "$bundle")
 [[ -n $(jq '.[] | select(.kind == "ClusterExternalSecret")' "$bundle") ]] \
-	|| fail "the 060 render has no ClusterExternalSecret"
+	|| fail "the 025 render has no ClusterExternalSecret"
 [[ -z $out ]] || fail "$out"
 echo "   ClusterExternalSecret reads only the public copy, granted by name"
 
@@ -260,7 +260,7 @@ if jq -e 'any(.[]; (.spec.target.manifest // .spec.externalSecretSpec.target.man
 	jq -e '.[] | select(.kind == "Deployment" and .metadata.name == "external-secrets")
 		| .spec.template.spec.containers[0].args | index("--unsafe-allow-generic-targets")' \
 		"$eso" >/dev/null \
-		|| fail "060 writes a ConfigMap, but the external-secrets controller is not" \
+		|| fail "025 writes a ConfigMap, but the external-secrets controller is not" \
 			"started with --unsafe-allow-generic-targets"
 	jq -e '. as $all | .[] | select(.kind == "ClusterRoleBinding")
 		| select(any(.subjects[]; .kind == "ServiceAccount" and .name == "external-secrets"
@@ -269,7 +269,7 @@ if jq -e 'any(.[]; (.spec.target.manifest // .spec.externalSecretSpec.target.man
 		| .rules[] | select(any(.resources[]; . == "configmaps"))
 		| select(.verbs | index("create") and index("update") and index("delete"))' \
 		"$eso" >/dev/null \
-		|| fail "060 writes a ConfigMap, but no ClusterRole in the 020 render lets" \
+		|| fail "025 writes a ConfigMap, but no ClusterRole in the 020 render lets" \
 			"the external-secrets controller create, update and delete one"
 	echo "   generic targets: controller flag set and ConfigMap writes granted"
 fi

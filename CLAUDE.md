@@ -207,6 +207,14 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   (`pkg/kustomize/kustomize.go`) — that is the ordering and what covers a CRD not yet served.
   - `010-cert-manager/` — upstream static manifest (`CERT_MANAGER_VER`, v1.21.2), patched for
     resources only. KServe's webhook certificate comes from it.
+  - `015-device-ca/` — the node's own CA. Self-signed `Issuer` `device-ca-bootstrap` →
+    `Certificate` `device-ca` (`isCA`, ECDSA P-256, 87600h, **`rotationPolicy: Never`**:
+    renewal keeps the key so old leaves and stale bundles still verify; cert-manager's default
+    became `Always` in v1.18) → `ClusterIssuer` `device-ca`. All in `cert-manager`, the
+    controller's `--cluster-resource-namespace`. The key is generated on the node, lives in
+    etcd, survives reboots and upgrades, and is never in the image: two nodes from one ISO have
+    different CAs, with the same CN (no per-device hostname yet). Beside `010`: it needs only
+    cert-manager's webhook, which `030` waits on anyway for KServe's Certificates.
   - `020-external-secrets/` — upstream manifest (`EXTERNAL_SECRETS_VER`, v1.2.0; image on
     `ghcr.io` from v1.1, `oci.external-secrets.io` before):
     - Each Deployment's patch deletes the `runAsUser: 1000` upstream pins (restricted-v2 assigns
@@ -224,6 +232,26 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
       `genericTargets.enabled`): an ExternalSecret may write a ConfigMap. Needs ESO ≥ v1.0
       (`target.manifest`); the flag without the role is an error in every namespace.
     - No external store yet, so what it reads from is unsettled.
+  - `025-device-ca-bundle/` — ConfigMap `device-ca.crt` (key `ca.crt`) in every namespace, in
+    the shape of `kube-root-ca.crt`. **Two hops**, because ESO's Kubernetes provider reads a
+    Secret whole and a `ClusterSecretStore` can be named from any namespace: one able to read
+    `device-ca` would hand anyone with ExternalSecret rights `tls.key`.
+    - `public-copy.yaml`: in `cert-manager`, SA + Role (`get`, `resourceNames: [device-ca]`) +
+      namespaced `SecretStore` + ExternalSecret copying `tls.crt` (not `ca.crt`: that becomes an
+      org root if one ever signs this CA) to Secret `device-ca-public`.
+    - `distribute.yaml`: SA + Role (`get`, `resourceNames: [device-ca-public]`) +
+      `ClusterSecretStore` (no `conditions`; harmless, it only reaches the public copy) +
+      `ClusterExternalSecret` (`namespaceSelectors: [{}]`, every namespace incl. future ones,
+      `target.manifest` ConfigMap).
+    - Both stores reach the API at `kubernetes.default`, verified with `kube-root-ca.crt`. No
+      rule for `selfsubjectrulesreviews` (store validation): `system:basic-user` grants it,
+      and a Role could not (cluster-scoped). Validation accepts a `resourceNames` rule.
+    - `025`, not beside `015`: its kinds are ESO's. MicroShift applies roots **one at a time**
+      and gives up on one after the 10 minutes, never returning until it restarts, so before
+      `020` it would stall every first boot 10 minutes and then never apply. **A root sorts
+      after everything it needs.**
+    - Rejected: **trust-manager** (the purpose-built tool) ships only as a Helm chart, so a new
+      tool in the build and another image; ESO is already here.
   - `030-kserve/` — upstream `kserve.yaml` (`KSERVE_VER`, v0.20.0; v0.21.0 had no release
     assets and adds a DaemonSet with no nodeSelector). `kserve-cluster-resources.yaml` is not
     fetched: fourteen runtimes' images would be embedded. Only `kserve-controller-manager`
@@ -245,35 +273,11 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     spelled out, 8Gi 1:1, CPU 1 → 4, TensorRT and ONNX. Pod-wide settings such as
     `supplementalGroups` go on the InferenceService. Plans load only in this image's TensorRT:
     build them with its `trtexec` on an Orin, and rebuild when the tag moves.
-  - `050-device-ca/` — the node's own CA. Self-signed `Issuer` `device-ca-bootstrap` →
-    `Certificate` `device-ca` (`isCA`, ECDSA P-256, 87600h, **`rotationPolicy: Never`**:
-    renewal keeps the key so old leaves and stale bundles still verify; cert-manager's default
-    became `Always` in v1.18) → `ClusterIssuer` `device-ca`. All in `cert-manager`, the
-    controller's `--cluster-resource-namespace`. The key is generated on the node, lives in
-    etcd, survives reboots and upgrades, and is never in the image: two nodes from one ISO have
-    different CAs, with the same CN (no per-device hostname yet). After `040` so the cert-manager
-    webhook is long up and MicroShift's retry holds no later root.
-  - `060-device-ca-bundle/` — ConfigMap `device-ca.crt` (key `ca.crt`) in every namespace, in
-    the shape of `kube-root-ca.crt`. **Two hops**, because ESO's Kubernetes provider reads a
-    Secret whole and a `ClusterSecretStore` can be named from any namespace: one able to read
-    `device-ca` would hand anyone with ExternalSecret rights `tls.key`.
-    - `public-copy.yaml`: in `cert-manager`, SA + Role (`get`, `resourceNames: [device-ca]`) +
-      namespaced `SecretStore` + ExternalSecret copying `tls.crt` (not `ca.crt`: that becomes an
-      org root if one ever signs this CA) to Secret `device-ca-public`.
-    - `distribute.yaml`: SA + Role (`get`, `resourceNames: [device-ca-public]`) +
-      `ClusterSecretStore` (no `conditions`; harmless, it only reaches the public copy) +
-      `ClusterExternalSecret` (`namespaceSelectors: [{}]`, every namespace incl. future ones,
-      `target.manifest` ConfigMap).
-    - Both stores reach the API at `kubernetes.default`, verified with `kube-root-ca.crt`. No
-      rule for `selfsubjectrulesreviews` (store validation): `system:basic-user` grants it,
-      and a Role could not (cluster-scoped). Validation accepts a `resourceNames` rule.
-    - Rejected: **trust-manager** (the purpose-built tool) ships only as a Helm chart, so a new
-      tool in the build and another image; ESO is already here.
   **Resources rule**, every root: memory request = limit (OOM-killed at its own ceiling, never
   evicted for outgrowing a request), CPU limit = 4 × request (burst room at start-up). Pods
   stay Burstable. Upstream sets almost none of this.
   **Images are derived from the render**: the version ARGs are the only pin. Seven today
-  (`050`/`060` add none): cert-manager ×3, External Secrets, `kserve-controller`,
+  (`015`/`025` add none): cert-manager ×3, External Secrets, `kserve-controller`,
   `kube-rbac-proxy`, and `tritonserver:25.02-py3-igpu` (the largest). The scan reads only
   `image:` fields, so a model's `oci://` image, and images named inside
   `inferenceservice-config`, go in `SERVICE_IMAGES` when used.

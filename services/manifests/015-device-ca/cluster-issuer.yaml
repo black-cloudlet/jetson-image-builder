@@ -1,7 +1,7 @@
 # What workloads ask for: a Certificate in any namespace with
 #   issuerRef: {group: cert-manager.io, kind: ClusterIssuer, name: device-ca}
 # gets a leaf signed by this node's CA, which every pod can verify against the
-# device-ca.crt ConfigMap 060 puts in its namespace. Anyone allowed to create
+# device-ca.crt ConfigMap 025 puts in its namespace. Anyone allowed to create
 # a Certificate can use it; upstream aggregates that right into the admin and
 # edit roles of every namespace.
 apiVersion: cert-manager.io/v1

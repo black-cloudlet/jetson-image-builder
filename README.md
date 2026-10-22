@@ -190,16 +190,20 @@ image is embedded and pinned.
 downloads the upstream installs (version-pinned ARGs), and embeds every image the rendered
 manifests name. MicroShift applies these kustomize roots itself at every start, **in name order**,
 retrying a failing root every 10 s for up to 10 minutes. That is how a root that needs another
-root's CRDs or webhook (`040` needs `030`) settles without anything sequencing it.
+root's CRDs or webhook (`040` needs `030`) settles without anything sequencing it. It is also why
+a root must sort **after** whatever it needs: one at a time, MicroShift gives up on a root after
+those 10 minutes and does not return to it until it restarts. So the device CA sits beside
+cert-manager (`015`) and its distribution right after External Secrets (`025`), whose kinds it
+uses.
 
 | Root | Service | What it does here | Namespace | Pods |
 |---|---|---|---|---|
 | `010-cert-manager` | cert-manager v1.21.2 | Issues KServe's webhook serving certificates (self-signed issuer, no ACME) | `cert-manager` | 3 |
+| `015-device-ca` | cert-manager objects | The node's own CA, generated on the node, and ClusterIssuer `device-ca` signing with it | `cert-manager` | 0 |
 | `020-external-secrets` | External Secrets v1.2.0 | Syncs secrets from a store; may write ConfigMaps too. **No external store configured yet** | `external-secrets` (moved off `default`) | 3 |
+| `025-device-ca-bundle` | External Secrets objects | Copies the CA certificate (never its key) into ConfigMap `device-ca.crt` in every namespace | `cert-manager`, then every namespace | 0 |
 | `030-kserve` | KServe v0.20.0, Standard (raw Deployment) mode | Turns an `InferenceService` into a model-serving Deployment + Service | `kserve` | 1 |
 | `040-triton-runtime` | NVIDIA Triton (`25.02-py3-igpu`) | The `ClusterServingRuntime` every InferenceService uses: TensorRT and ONNX models on the iGPU | cluster-scoped | one per InferenceService |
-| `050-device-ca` | cert-manager objects | The node's own CA, generated on the node, and ClusterIssuer `device-ca` signing with it | `cert-manager` | 0 |
-| `060-device-ca-bundle` | External Secrets objects | Copies the CA certificate (never its key) into ConfigMap `device-ca.crt` in every namespace | `cert-manager`, then every namespace | 0 |
 
 Upstream manifests are downloaded at build time and **patched, never forked**. A patch that
 stops matching fails the build.
@@ -214,18 +218,18 @@ stops matching fails the build.
   three namespace names inside container arguments. Those are JSON patches, each guarded by a
   `test` op, so an upstream reorder fails the build rather than rewriting the wrong argument.
 - Generic targets are on: the controller runs with `--unsafe-allow-generic-targets` and a
-  ClusterRole lets it write ConfigMaps, so an ExternalSecret can produce a ConfigMap. `060` uses it.
+  ClusterRole lets it write ConfigMaps, so an ExternalSecret can produce a ConfigMap. `025` uses it.
 
 **Device CA.** Every node has a CA of its own: cert-manager generates the key on the node the
-first time MicroShift applies `050`, and it never leaves the node's etcd. Two nodes from one ISO
+first time MicroShift applies `015`, and it never leaves the node's etcd. Two nodes from one ISO
 have different CAs. It survives reboots and OS upgrades, and is replaced by
 `microshift-cleanup-data` or a re-image.
-- `050`: a self-signed `Issuer` signs the CA `Certificate` (`isCA`, ECDSA P-256, ten years, key
+- `015`: a self-signed `Issuer` signs the CA `Certificate` (`isCA`, ECDSA P-256, ten years, key
   kept on renewal), and `ClusterIssuer` **`device-ca`** signs with it. Any namespace gets a
   certificate from it with `issuerRef: {kind: ClusterIssuer, name: device-ca}`.
-- `060`: every namespace gets ConfigMap **`device-ca.crt`**, key `ca.crt`, next to the
+- `025`: every namespace gets ConfigMap **`device-ca.crt`**, key `ca.crt`, next to the
   `kube-root-ca.crt` already there. Mount it to trust certificates `device-ca` issued.
-- The CA Secret holds the private key, and External Secrets reads a Secret whole, so `060` is two
+- The CA Secret holds the private key, and External Secrets reads a Secret whole, so `025` is two
   hops. In `cert-manager`, a namespaced `SecretStore` that alone may read `device-ca` copies its
   certificate into Secret `device-ca-public`. A `ClusterSecretStore` whose account may read
   `device-ca-public` and nothing else feeds a `ClusterExternalSecret` that writes the ConfigMap
