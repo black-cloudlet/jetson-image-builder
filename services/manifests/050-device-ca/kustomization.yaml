@@ -1,0 +1,18 @@
+# The node's own CA: a key cert-manager generates on this device the first time
+# MicroShift applies this root, kept in etcd, and never in the image. Every
+# node built from one ISO therefore has a different CA, and a key that has
+# never left it. It lasts as long as /var/lib/microshift: an OS upgrade or a
+# reboot keeps it, `microshift-cleanup-data` or a re-image makes a new one.
+#
+# Three objects, in the order cert-manager needs them: a self-signed Issuer,
+# the CA Certificate it signs, and the ClusterIssuer that signs with the
+# result. After 040 rather than right after 010: the cert-manager webhook has
+# to be serving before any of these is admitted, and MicroShift's retry would
+# otherwise hold every later root while it starts. 060 copies the public half
+# into every namespace.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - bootstrap-issuer.yaml
+  - certificate.yaml
+  - cluster-issuer.yaml

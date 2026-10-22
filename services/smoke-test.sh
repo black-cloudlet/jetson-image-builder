@@ -157,6 +157,123 @@ csc=$(jq -r '.[] | select(.kind == "ClusterStorageContainer") | .metadata.name' 
 [[ -z $csc ]] || fail "the kserve render carries a ClusterStorageContainer:" $csc
 echo "   no ClusterStorageContainer"
 
+echo "== device CA =="
+# 050 and 060 are written here, not upstream, so the risk is not drift but
+# disagreement: a name one root spells differently from another, or from
+# cert-manager, shows only on hardware, as a Certificate or ExternalSecret that
+# never goes Ready.
+ca=$render/050-device-ca.json
+bundle=$render/060-device-ca-bundle.json
+# A ClusterIssuer reads its Secret from the controller's cluster resource
+# namespace, which upstream sets to the namespace it runs in.
+crn=$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "cert-manager")
+	| .metadata.namespace as $ns | .spec.template.spec.containers[0].args[]
+	| select(startswith("--cluster-resource-namespace="))
+	| ltrimstr("--cluster-resource-namespace=") | sub("\\$\\(POD_NAMESPACE\\)"; $ns)' \
+	"$render/010-cert-manager.json")
+[[ -n $crn ]] || fail "cert-manager sets no --cluster-resource-namespace in the 010 render"
+out=$(jq -r --arg crn "$crn" '
+	[.[] | select(.kind == "Certificate" and .spec.isCA == true)] as $cas
+	| if ($cas | length) != 1 then "want one CA Certificate, found \($cas | length)" else
+	$cas[0] as $c | "Certificate/\($c.metadata.name)" as $o
+	| (if $c.spec.issuerRef.kind != "Issuer" or ([.[] | select(.kind == "Issuer"
+		and .metadata.namespace == $c.metadata.namespace
+		and .metadata.name == $c.spec.issuerRef.name and .spec.selfSigned != null)]
+		| length) != 1
+		then "\($o) is not signed by a self-signed Issuer in its own namespace" else empty end),
+	  (if $c.metadata.namespace != $crn
+		then "\($o) is in \($c.metadata.namespace); ClusterIssuers read Secrets from \($crn)"
+		else empty end),
+	  (if any(.[]; .kind == "ClusterIssuer" and .spec.ca.secretName == $c.spec.secretName) | not
+		then "no ClusterIssuer signs with \($c.spec.secretName), the Secret \($o) writes"
+		else empty end)
+	end' "$ca")
+[[ -z $out ]] || fail "$out"
+read -r ca_ns ca_secret < <(jq -r '.[] | select(.kind == "Certificate" and .spec.isCA == true)
+	| "\(.metadata.namespace) \(.spec.secretName)"' "$ca")
+echo "   $ca_ns/$ca_secret: self-signed, read by a ClusterIssuer from $crn"
+
+# The private key is in that Secret. Only an ExternalSecret in its namespace,
+# through a namespaced SecretStore, may read it, and only a certificate field:
+# no property, or a dataFrom extract, returns tls.key along with the rest. And
+# no account a ClusterSecretStore authenticates as, which any namespace can
+# name, may be able to read it at all. Bindings outside this root are not seen.
+out=$(jq -r --arg ns "$ca_ns" --arg s "$ca_secret" '
+	. as $all
+	| def secret_rules($sa): $all[]
+		| select(.kind == "RoleBinding" or .kind == "ClusterRoleBinding")
+		| select(any(.subjects[]?; .kind == "ServiceAccount"
+			and .name == $sa.name and .namespace == $sa.namespace))
+		| .roleRef as $r | $all[] | select(.kind == $r.kind and .metadata.name == $r.name)
+		| .rules[] | select(any(.apiGroups[]; . == "" or . == "*")
+			and any(.resources[]; . == "secrets" or . == "*"));
+	def es: if .kind == "ClusterExternalSecret" then .spec.externalSecretSpec else .spec end;
+	(.[] | select(.kind == "ExternalSecret" or .kind == "ClusterExternalSecret")
+		| "\(.kind)/\(.metadata.name)" as $o | .metadata.namespace as $at | es
+		| (if any(.data[]?; .remoteRef.key == $s) and (($o | startswith("Cluster"))
+			or $at != $ns or (.secretStoreRef.kind // "SecretStore") != "SecretStore")
+			then "\($o) reads \($s) from outside \($ns) or through a cluster store"
+			else empty end),
+		  (.data[]? | select(.remoteRef.key == $s)
+			| select(.remoteRef.property | IN("tls.crt", "ca.crt") | not)
+			| "\($o) reads \($s) property \(.remoteRef.property // "(all of it)")"),
+		  (.dataFrom[]? | select(.extract.key == $s) | "\($o) extracts all of \($s)")),
+	(.[] | select(.kind == "ClusterSecretStore") | "ClusterSecretStore/\(.metadata.name)" as $o
+		| .spec.provider.kubernetes.auth.serviceAccount as $sa | select($sa != null)
+		| secret_rules($sa) | select((.resourceNames // []) == [] or any(.resourceNames[]; . == $s))
+		| "\($o): its account \($sa.namespace)/\($sa.name) can read \($s)")
+	' "$bundle")
+[[ -z $out ]] || fail "$out"
+echo "   $ca_secret: read by name, one certificate field, through a namespaced store only"
+
+# What the ClusterExternalSecret reads must be granted to its store's account
+# by name, and be the public copy some ExternalSecret writes; otherwise every
+# namespace gets an ExternalSecret stuck on Forbidden or not found.
+out=$(jq -r '. as $all
+	| .[] | select(.kind == "ClusterExternalSecret") | "\(.kind)/\(.metadata.name)" as $o
+	| .spec.externalSecretSpec as $spec
+	| ($all[] | select(.kind == "ClusterSecretStore"
+		and .metadata.name == $spec.secretStoreRef.name)) as $css
+	| $css.spec.provider.kubernetes as $k
+	| [$all[] | select(.kind == "RoleBinding" and .metadata.namespace == $k.remoteNamespace)
+		| select(any(.subjects[]; .name == $k.auth.serviceAccount.name
+			and .namespace == $k.auth.serviceAccount.namespace))
+		| .roleRef.name as $r | $all[] | select(.kind == "Role" and .metadata.name == $r
+			and .metadata.namespace == $k.remoteNamespace)
+		| .rules[] | select(any(.verbs[]; . == "get")) | .resourceNames[]?] as $granted
+	| $spec.data[].remoteRef.key
+	| (if IN($granted[]) | not
+		then "\($o) reads \(.), which its store account may not get" else empty end),
+	  (. as $k2 | if any($all[]; .kind == "ExternalSecret"
+		and .metadata.namespace == $k.remoteNamespace and .spec.target.name == $k2) | not
+		then "\($o) reads \(.), which no ExternalSecret in \($k.remoteNamespace) writes"
+		else empty end)' "$bundle")
+[[ -n $(jq '.[] | select(.kind == "ClusterExternalSecret")' "$bundle") ]] \
+	|| fail "the 060 render has no ClusterExternalSecret"
+[[ -z $out ]] || fail "$out"
+echo "   ClusterExternalSecret reads only the public copy, granted by name"
+
+# A ConfigMap target needs the controller flag and the write; without either,
+# ESO reports an error on an ExternalSecret in every namespace.
+if jq -e 'any(.[]; (.spec.target.manifest // .spec.externalSecretSpec.target.manifest) != null)' \
+	"$bundle" >/dev/null; then
+	jq -e '.[] | select(.kind == "Deployment" and .metadata.name == "external-secrets")
+		| .spec.template.spec.containers[0].args | index("--unsafe-allow-generic-targets")' \
+		"$eso" >/dev/null \
+		|| fail "060 writes a ConfigMap, but the external-secrets controller is not" \
+			"started with --unsafe-allow-generic-targets"
+	jq -e '. as $all | .[] | select(.kind == "ClusterRoleBinding")
+		| select(any(.subjects[]; .kind == "ServiceAccount" and .name == "external-secrets"
+			and .namespace == "external-secrets"))
+		| .roleRef.name as $r | $all[] | select(.kind == "ClusterRole" and .metadata.name == $r)
+		| .rules[] | select(any(.resources[]; . == "configmaps"))
+		| select(.verbs | index("create") and index("update") and index("delete"))' \
+		"$eso" >/dev/null \
+		|| fail "060 writes a ConfigMap, but no ClusterRole in the 020 render lets" \
+			"the external-secrets controller create, update and delete one"
+	echo "   generic targets: controller flag set and ConfigMap writes granted"
+fi
+
 echo "== restricted-v2 =="
 # Every pod template and serving runtime container, checked for what the SCC
 # requires rather than left for it to default, so a broken patch fails the

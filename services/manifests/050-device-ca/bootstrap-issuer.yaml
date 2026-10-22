@@ -1,0 +1,11 @@
+# Signs exactly one certificate, the CA's own. A namespaced Issuer, not a
+# ClusterIssuer: it is only ever referenced from certificate.yaml, and a
+# self-signed ClusterIssuer would let a Certificate in any namespace mint
+# itself a self-signed CA too.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: device-ca-bootstrap
+  namespace: cert-manager
+spec:
+  selfSigned: {}

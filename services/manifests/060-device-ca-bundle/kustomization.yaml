@@ -1,0 +1,28 @@
+# Puts the public half of 050's CA into every namespace as ConfigMap
+# device-ca.crt, key ca.crt: the shape of the kube-root-ca.crt and
+# openshift-service-ca.crt ConfigMaps already there. A pod trusts the node's CA
+# by mounting it; nothing else changes when the CA renews.
+#
+# Two hops, because External Secrets reads a Kubernetes Secret whole. A
+# ClusterSecretStore pointed at cert-manager/device-ca could be named by an
+# ExternalSecret in any namespace, and one without `property` gets every key,
+# tls.key included: anyone able to create an ExternalSecret could sign as the
+# node. So:
+#   public-copy.yaml  in cert-manager, a namespaced SecretStore that alone can
+#                     read device-ca copies tls.crt into Secret device-ca-public.
+#                     A SecretStore serves only its own namespace's
+#                     ExternalSecrets, and that namespace already holds the key.
+#   distribute.yaml   a ClusterSecretStore that can read device-ca-public and
+#                     nothing else, and a ClusterExternalSecret writing the
+#                     ConfigMap into every namespace from it. Usable from any
+#                     namespace, which is harmless: all it can hand out is public.
+#
+# Writing a ConfigMap is ESO's generic target: 020 turns it on
+# (--unsafe-allow-generic-targets) and grants the controller the right to.
+# Until 050's Secret exists both hops fail and retry; that is the steady state
+# for the first minute after a first boot.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - public-copy.yaml
+  - distribute.yaml

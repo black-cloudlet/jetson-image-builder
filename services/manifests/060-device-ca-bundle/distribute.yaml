@@ -1,0 +1,89 @@
+# Hop 2: cert-manager/device-ca-public to ConfigMap device-ca.crt in every
+# namespace. The reader's Role names only the public copy; the smoke test fails
+# if any account a ClusterSecretStore here uses can read device-ca itself.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: device-ca-bundle-reader
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: device-ca-bundle-reader
+  namespace: cert-manager
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["device-ca-public"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: device-ca-bundle-reader
+  namespace: cert-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: device-ca-bundle-reader
+subjects:
+  - kind: ServiceAccount
+    name: device-ca-bundle-reader
+    namespace: cert-manager
+---
+# No `conditions`: every namespace may use it, which the ClusterExternalSecret
+# needs. A cluster store names its namespaces explicitly, or ESO would look for
+# the account and the CA ConfigMap in each ExternalSecret's own namespace.
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: device-ca-bundle
+spec:
+  provider:
+    kubernetes:
+      remoteNamespace: cert-manager
+      server:
+        caProvider:
+          type: ConfigMap
+          name: kube-root-ca.crt
+          namespace: cert-manager
+          key: ca.crt
+      auth:
+        serviceAccount:
+          name: device-ca-bundle-reader
+          namespace: cert-manager
+---
+# One empty selector matches every namespace, present and future: ESO lists
+# namespaces again every refreshTime (1m by default) and adds an ExternalSecret
+# to each new one, so a namespace has the ConfigMap within a minute of being
+# created, kube-system and openshift-* included. Not a pod-visible change for
+# anyone who does not mount it.
+#
+# The ConfigMap is owned by its ExternalSecret, which ESO labels
+# externalsecrets.external-secrets.io/managed and puts back if edited by hand.
+# A CA renewal reaches every namespace within two refreshIntervals.
+apiVersion: external-secrets.io/v1
+kind: ClusterExternalSecret
+metadata:
+  name: device-ca-bundle
+spec:
+  externalSecretName: device-ca-bundle
+  namespaceSelectors:
+    - {}
+  externalSecretSpec:
+    refreshInterval: 1h
+    secretStoreRef:
+      kind: ClusterSecretStore
+      name: device-ca-bundle
+    target:
+      name: device-ca.crt
+      creationPolicy: Owner
+      manifest:
+        apiVersion: v1
+        kind: ConfigMap
+    data:
+      - secretKey: ca.crt
+        remoteRef:
+          key: device-ca-public
+          property: ca.crt
