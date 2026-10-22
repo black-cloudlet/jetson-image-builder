@@ -1,0 +1,41 @@
+# The CA itself. In cert-manager, not anywhere else: a ClusterIssuer reads its
+# Secret from the controller's --cluster-resource-namespace, which upstream sets
+# to the namespace it runs in. The Secret holds tls.key, so nothing outside
+# that namespace may read it; 025 copies tls.crt alone.
+#
+# commonName is the same on every node: a manifest cannot know the hostname,
+# and the kickstart gives every node the same one until per-device addressing
+# is settled. Two nodes' CAs are told apart by key and serial, so a client that
+# trusts both picks between two issuers of the same name by key identifier.
+#
+# Ten years, renewed after two thirds of it (cert-manager's default). The
+# rotationPolicy is the one setting that matters on renewal: Never keeps the
+# key, so the renewed certificate has the same subject and key, every leaf it
+# signed before still chains to it, and a bundle that has not caught up yet
+# still verifies new leaves. cert-manager's default became Always in v1.18,
+# which would cut every existing leaf off from the new bundle at once.
+#
+# Deleting this Certificate leaves the Secret behind (the static manifest does
+# not set --enable-certificate-owner-ref), so MicroShift re-applying the root
+# at every start finds the Secret and issues nothing.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: device-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: Cloudlet device CA
+  subject:
+    organizations:
+      - Cloudlet
+  secretName: device-ca
+  duration: 87600h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: device-ca-bootstrap

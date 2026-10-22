@@ -1,0 +1,81 @@
+# Hop 1: cert-manager/device-ca (tls.crt, tls.key, ca.crt) to
+# cert-manager/device-ca-public (ca.crt). tls.crt, not ca.crt: they are the
+# same certificate while the CA is self-signed, but if it is ever signed by an
+# organisation root instead, ca.crt becomes that root and tls.crt stays this
+# node's CA, which is what its pods should trust.
+#
+# The Role names the one Secret, so the token ESO mints for this account reads
+# device-ca and nothing else in cert-manager. The SelfSubjectRulesReview the
+# store makes to validate itself needs no rule here: Kubernetes grants it to
+# every authenticated identity (system:basic-user).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: device-ca-exporter
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: device-ca-exporter
+  namespace: cert-manager
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["device-ca"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: device-ca-exporter
+  namespace: cert-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: device-ca-exporter
+subjects:
+  - kind: ServiceAccount
+    name: device-ca-exporter
+    namespace: cert-manager
+---
+# The local API server, through the Service every pod uses, verified against the
+# CA in kube-root-ca.crt, as in-cluster clients do.
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: device-ca
+  namespace: cert-manager
+spec:
+  provider:
+    kubernetes:
+      remoteNamespace: cert-manager
+      server:
+        caProvider:
+          type: ConfigMap
+          name: kube-root-ca.crt
+          key: ca.crt
+      auth:
+        serviceAccount:
+          name: device-ca-exporter
+---
+# `property` is what keeps tls.key out: without it the provider returns every
+# key of the Secret as one JSON value.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: device-ca-public
+  namespace: cert-manager
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: SecretStore
+    name: device-ca
+  target:
+    name: device-ca-public
+    creationPolicy: Owner
+  data:
+    - secretKey: ca.crt
+      remoteRef:
+        key: device-ca
+        property: tls.crt
