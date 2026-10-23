@@ -1,0 +1,35 @@
+# Layer 3, shared: the frontend in Firefox, fullscreen on the DisplayPort
+# output. Red Hat's documented kiosk setup: GDM logs the kiosk user in, GNOME
+# Kiosk's script session starts, and the script opens Firefox. Below the
+# Kubernetes variant, because nothing here is about the cluster.
+ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-bound-images:latest
+FROM ${BASE_IMAGE}
+
+# DejaVu Sans covers Latin and Hebrew; the frontend must bundle any other font.
+RUN dnf install -y gdm gnome-kiosk-script-session firefox dejavu-sans-fonts && \
+    systemctl enable gdm && \
+    systemctl set-default graphical.target && \
+    dnf clean all
+
+# The kiosk user, its home, the script the session runs from that home, and
+# the session GDM starts for it. sysusers and tmpfiles rather than useradd and
+# files in /var: /etc/passwd goes through bootc's /etc merge, and /var in the
+# image is not deployed.
+COPY kiosk/sysusers.conf /usr/lib/sysusers.d/jetson-kiosk.conf
+COPY kiosk/tmpfiles.conf /usr/lib/tmpfiles.d/jetson-kiosk.conf
+COPY --chmod=0555 kiosk/gnome-kiosk-script /usr/libexec/jetson-kiosk/gnome-kiosk-script
+
+# Log the kiosk user in at boot, with no login screen.
+COPY kiosk/gdm-custom.conf /etc/gdm/custom.conf
+
+# JSON takes no comments, so the why is here: no updates, telemetry, studies,
+# safe browsing or OpenH264 download (all would try the internet), no disk
+# cache (eMMC writes), no crash-restore page, no file:// pages (a file picker
+# would otherwise browse the disk), and nothing a kiosk user could escape the
+# page with.
+COPY kiosk/policies.json /etc/firefox/policies/policies.json
+
+# /etc, so one device can point somewhere else without a rebuild.
+COPY kiosk/jetson-kiosk.conf /etc/jetson-kiosk.conf
+
+RUN bootc container lint

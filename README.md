@@ -30,6 +30,7 @@ time and shipped inside one OS image:
 - the Kubernetes distribution (MicroShift 4.20) and its GPU device plugin;
 - the services that run on the cluster (cert-manager, External Secrets, KServe and a Triton
   model server);
+- a kiosk: the frontend in Firefox, fullscreen on the DisplayPort output;
 - **every container image** any of the above will ever start, so the cluster comes up with no
   registry reachable.
 
@@ -86,13 +87,15 @@ This repository is the right-hand column.
 
 ## The layers
 
-The image is built as a chain of four container images. Each is `FROM` the one before it, by
+The image is built as a chain of five container images. Each is `FROM` the one before it, by
 digest, and each is pushed to GHCR on its own as `ghcr.io/black-cloudlet/jetson-orin-bootc-<name>`:
 
 ```
  base            Red Hat's JetPack-for-RHEL image, republished under our name
    │
  bound-images    image-embedding machinery + jtop + Edge Manager agent
+   │
+ kiosk           GDM + GNOME Kiosk + Firefox on the DisplayPort output
    │
  microshift      MicroShift 4.20 + NVIDIA device plugin (GPU time slicing) + their images
    │
@@ -105,13 +108,16 @@ digest, and each is pushed to GHCR on its own as `ghcr.io/black-cloudlet/jetson-
 |---|---|---|---|---|
 | base | `base/Containerfile.base` | `jetson-orin-bootc-base` | nothing: a pure republish of the vendor image | no (registers anyway, one code path) |
 | bound-images | `base/Containerfile.podman` | `jetson-orin-bootc-bound-images` | the scripts and boot unit that embed and restore container images; `jtop`; the Edge Manager agent | yes (`python3-pip`, `rhacm` repo) |
+| kiosk | `kiosk/Containerfile` | `jetson-orin-bootc-kiosk` | GDM, GNOME Kiosk, Firefox, the `kiosk` user | yes (AppStream) |
 | microshift | `microshift/Containerfile` | `jetson-orin-bootc-microshift` | MicroShift, firewall, node networking, GPU device plugin, 9+ embedded images | yes (`rhocp` + `fast-datapath` repos) |
 | services | `services/Containerfile` | `jetson-orin-bootc-services` | four kustomize roots applied by MicroShift, 7 embedded images | no RPMs |
 
 **Why a chain instead of one Containerfile:** rebuild cost. The microshift layer installs RPMs
 and pulls MicroShift's whole control plane (nine images); the services layer changes far more
 often. With services on top, changing a service rebuilds and re-pushes only that layer. Changing
-the MicroShift version rebuilds `microshift` and `services`, never the two shared layers.
+the MicroShift version rebuilds `microshift` and `services`, never the three shared layers.
+Changing the kiosk rebuilds everything above it, including MicroShift's image pulls; it
+changes rarely, and putting it on top instead would reinstall Firefox on every service change.
 
 ### base: the vendor image, republished
 
@@ -152,6 +158,51 @@ paid for by every variant.
 The file name and the image name differ: `Containerfile.podman` builds the image published as
 `jetson-orin-bootc-bound-images`, from a CI job spelled `bound_images`. The underscore matters:
 `needs.bound-images` would parse as a subtraction.
+
+### kiosk: Firefox on the DisplayPort output
+
+`kiosk/Containerfile`. Plug a monitor into the Jetson and it shows the frontend, fullscreen. This is
+Red Hat's documented kiosk setup, nothing more:
+
+1. The node boots to `graphical.target`, so **GDM** starts.
+2. GDM logs the **`kiosk`** user in automatically (`/etc/gdm/custom.conf`). The user comes from
+   `sysusers.d` (UID 1500, password locked).
+3. The session is **GNOME Kiosk's script session** (`gnome-kiosk-script-wayland`, set in the
+   user's AccountsService file). GNOME Kiosk is the compositor; it makes every window fullscreen
+   and lights a monitor whenever one is plugged in.
+4. That session runs `~/.local/bin/gnome-kiosk-script`, a link to our script, in a loop:
+   - it waits until a DRM connector reports `connected`, so with no monitor nothing decodes
+     video for nobody;
+   - it waits until `KIOSK_URL` answers with anything but a 5xx (MicroShift needs minutes after
+     boot);
+   - it runs `firefox --kiosk`, and closes it after 10 s without a monitor;
+   - when Firefox exits, it starts it again after 1 s. A Firefox that keeps dying within a
+     minute waits 2, 4, 8… up to 60 s instead, so a crash loop does not eat a core.
+
+The kiosk user's home and the AccountsService file are in `/var`, so they come from
+`tmpfiles.d`, created at boot; anything put in `/var` at build time is not deployed.
+
+Drawing goes through GNOME Kiosk's and Firefox's defaults: the GPU where the drivers allow it.
+It runs outside Kubernetes, so the device plugin does not count it.
+
+**Configuration.**
+- `/etc/jetson-kiosk.conf` holds `KIOSK_URL`. It is in `/etc` so one device can point elsewhere
+  without a rebuild. The default, `http://jetson-1.cloudlet.local/`, is a placeholder until the
+  frontend's Route host is known. It resolves only through the network's DNS, so with the cable
+  out the kiosk waits at its URL check; the real host must resolve offline.
+- `/etc/firefox/policies/policies.json`: no updates, telemetry, studies or safe-browsing
+  downloads (all would try the internet), no OpenH264 download, no disk cache, no crash-restore
+  page, no `file://` pages (a file picker would otherwise browse the disk), no developer tools,
+  `about:config` or private windows.
+
+**What the frontend has to live with** on this screen: no H.264 video (RHEL's Firefox has no
+decoder for it, and the OpenH264 plugin is a download), nothing loaded from the internet, and
+reconnecting its own streams, since nobody can press reload.
+
+Its smoke test checks the node boots to GDM, then runs `systemd-sysusers` and
+`systemd-tmpfiles` inside the test container as a boot would, and checks the results agree: GDM's
+autologin user exists, the session it names is installed, the script is in place and parses, and
+the policy file parses.
 
 ### microshift: Kubernetes and the GPU
 
@@ -320,9 +371,9 @@ Seven images come from the services layer today: cert-manager ×3, External Secr
 |---|---|---|
 | `.github/workflows/build-image.yml` | reusable (`workflow_call`) | builds, tests and pushes **one layer** |
 | `.github/workflows/build-iso.yml` | reusable (`workflow_call`) | turns a pushed image into an **installer ISO** |
-| `.github/workflows/build-microshift.yml` | caller | chains them: `base` → `bound_images` → `microshift` → `services` → `iso` |
+| `.github/workflows/build-microshift.yml` | caller | chains them: `base` → `bound_images` → `kiosk` → `microshift` → `services` → `iso` |
 
-`build-microshift.yml` runs on **push to `main`** that touches `base/`, `microshift/`,
+`build-microshift.yml` runs on **push to `main`** that touches `base/`, `kiosk/`, `microshift/`,
 `services/`, `config.toml` or the workflows, and on **manual dispatch** (`workflow_dispatch`).
 **Nothing runs on a pull request**: to validate a branch, dispatch the workflow against it from the Actions tab.
 
@@ -359,7 +410,7 @@ Every layer is published under these tags, all naming the same manifest:
 |---|---|
 | `<YYYYMMDD>-<sha8>` | immutable: what a node rolls back to, what a mirror keeps |
 | `latest` | the last build |
-| `stable` | the release set: all four layers from one run, mirrored together |
+| `stable` | the release set: all five layers from one run, mirrored together |
 | `4.20` | the MicroShift minor, on `microshift` and `services` only; set from the same line as the build's `USHIFT_VER`, so the tag cannot claim a version it was not built from |
 
 ### The ISO (`build-iso.yml`)
@@ -452,6 +503,14 @@ reboots ejecting the media.
    journalctl -u microshift | grep -i kustomization   # a root still retrying shows here
    ```
 
+6. **Kiosk**, with a monitor on the DisplayPort socket:
+   ```
+   lsmod | grep -E 'nvidia_drm|nvidia_modeset'   # the display driver; without it nothing shows
+   cat /sys/class/drm/card*-*/status             # flips to connected/disconnected with the cable
+   systemctl status gdm                          # the kiosk user's session under it
+   tegrastats                                    # GR3D_FREQ: the screen's share of the GPU
+   ```
+
 A pod in `ImagePullBackOff` means an image was not embedded: check
 `/usr/lib/containers-image-cache/mapping.txt` and `journalctl -u copy-embedded-images`. A
 Deployment that creates no pods is usually a security-policy refusal, visible in
@@ -521,9 +580,11 @@ injects on a registered host), from the repository root:
 sudo podman build -f base/Containerfile.base   -t localhost/jetson-orin-bootc-base:dev .
 sudo podman build -f base/Containerfile.podman -t localhost/jetson-orin-bootc-bound-images:dev \
   --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-base:dev .
+sudo podman build -f kiosk/Containerfile       -t localhost/jetson-orin-bootc-kiosk:dev \
+  --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-bound-images:dev .
 sudo podman build -f microshift/Containerfile  -t localhost/jetson-orin-bootc-microshift:dev \
   --secret id=pullsecret,src=$HOME/pull-secret.json \
-  --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-bound-images:dev .
+  --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-kiosk:dev .
 sudo podman build -f services/Containerfile    -t localhost/jetson-orin-bootc-services:dev \
   --secret id=pullsecret,src=$HOME/pull-secret.json \
   --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-microshift:dev .
@@ -552,9 +613,9 @@ Give every container requests and limits at the house ratios, keep it admissible
 `image:` field, such as a model's `oci://` image, go in `SERVICE_IMAGES`. A new registry goes in
 `microshift/crio.conf.d/20-pinned-images.conf`, or the smoke test fails.
 
-**A variant:** create `<name>/` with a `Containerfile` (`FROM` bound-images via
-`ARG BASE_IMAGE`) and a `smoke-test.sh`. Then copy `build-microshift.yml` and
-point its variant and `iso` jobs at it. `base` and `bound_images` are reused unchanged.
+**A variant:** create `<name>/` with a `Containerfile` (`FROM` kiosk via `ARG BASE_IMAGE`) and a
+`smoke-test.sh`. Then copy `build-microshift.yml` and point its variant and `iso` jobs at it.
+`base`, `bound_images` and `kiosk` are reused unchanged.
 
 ## Not settled yet
 
@@ -573,6 +634,9 @@ point its variant and `iso` jobs at it. `base` and `bound_images` are reused unc
   in `/etc/ostree/auth.json`.
 - **The address and hostname are per ISO, not per device.**
 - **No node is connected to Edge Manager.** Nothing writes `/etc/flightctl/config.yaml` yet.
+- **The kiosk is unverified on hardware.** Whether the base image carries the Jetson display
+  driver, what GNOME Kiosk and Firefox draw with on it, and what the screen costs the model all
+  need the device. `KIOSK_URL` is a placeholder.
 
 The design record, with every decision and why, is `CLAUDE.md`.
 
@@ -588,17 +652,24 @@ The design record, with every decision and why, is `CLAUDE.md`.
 | `base/physically-bound-images/embed_image.sh` | build time: copy one image into the cache in `/usr` |
 | `base/physically-bound-images/copy_embedded_images.sh` | boot time: restore the cache, prune what an older OS left |
 | `base/physically-bound-images/copy-embedded-images.service` | runs it once per boot, before MicroShift |
-| `microshift/Containerfile` | layer 3: MicroShift, firewall, node IP, GPU device plugin, their images |
+| `kiosk/Containerfile` | layer 3: GDM, GNOME Kiosk, Firefox |
+| `kiosk/gnome-kiosk-script` | waits for a monitor and the URL, runs Firefox, closes it on unplug, restarts it with back-off |
+| `kiosk/gdm-custom.conf` | GDM logs `kiosk` in automatically |
+| `kiosk/sysusers.conf`, `kiosk/tmpfiles.conf` | the `kiosk` user, its home and session |
+| `kiosk/jetson-kiosk.conf` | `KIOSK_URL` |
+| `kiosk/policies.json` | Firefox lockdown |
+| `kiosk/smoke-test.sh` | checks the layer is wired together |
+| `microshift/Containerfile` | layer 4: MicroShift, firewall, node IP, GPU device plugin, their images |
 | `microshift/manifests/` | device-plugin kustomization and the GPU time-slicing config |
 | `microshift/stable-microshift.nmconnection` | `10.44.0.1/32` on `lo` |
 | `microshift/config.d/10-node-ip.yaml` | tells MicroShift to use it |
 | `microshift/crio.conf.d/20-pinned-images.conf` | CRI-O pins: kubelet never deletes an embedded image |
 | `microshift/manifest-images.sh` | renders manifest roots, prints every image they name |
 | `microshift/smoke-test.sh` | checks for the microshift layer |
-| `services/Containerfile` | layer 4: the manifest roots, upstream installs, their images |
+| `services/Containerfile` | layer 5: the manifest roots, upstream installs, their images |
 | `services/manifests/0x0-*/` | one kustomize root per service, applied by MicroShift in order |
 | `services/smoke-test.sh` | render, admission, resource and image checks |
 | `.github/workflows/build-image.yml` | reusable: build, test and push one layer |
 | `.github/workflows/build-iso.yml` | reusable: build the installer ISO |
-| `.github/workflows/build-microshift.yml` | the pipeline: base → bound-images → microshift → services → ISO |
+| `.github/workflows/build-microshift.yml` | the pipeline: base → bound-images → kiosk → microshift → services → ISO |
 | `CLAUDE.md` | the design record: decisions, rationale, open questions |
