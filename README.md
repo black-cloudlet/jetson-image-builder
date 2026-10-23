@@ -174,8 +174,9 @@ Red Hat's documented kiosk setup, nothing more:
    GHCR packages and the air-gapped registry must be private. The admin user `cloudlet` is hidden
    from the login screen, and `sshd` refuses `kiosk`: the password is for the screen only.
    Once logged in the session stays open until reboot: GNOME Kiosk has no screen lock.
-3. The session is **GNOME Kiosk's script session** (`gnome-kiosk-script-wayland`, set in the
-   user's AccountsService file). GNOME Kiosk is the compositor; it makes every window fullscreen
+3. The session is **GNOME Kiosk's script session** (`gnome-kiosk-script`, set in the user's
+   AccountsService file), the only session the login screen offers: the build deletes GNOME
+   Shell's, which GDM pulls in and which would be a full desktop. GNOME Kiosk is the compositor; it makes every window fullscreen
    and lights a monitor whenever one is plugged in.
 4. That session runs `~/.local/bin/gnome-kiosk-script`, a link to our script, in a loop:
    - it waits until a DRM connector reports `connected`, so with no monitor nothing decodes
@@ -237,7 +238,7 @@ reconnecting its own streams, since nobody can press reload.
 Its smoke test checks the node boots to GDM, then runs `systemd-sysusers` (with the password
 credential) and `systemd-tmpfiles` inside the test container as a boot would, and checks the
 results agree: the hash file is `0600`, the `kiosk` user exists with that hash, the session its
-AccountsService file names is installed, the script is in
+AccountsService file names is the only one the login screen offers, the script is in
 place and parses, `sshd` reads the drop-in that refuses `kiosk`, no terminal emulator or file
 manager is installed, `kiosk` has no extra groups, the console PAM rule is the first account
 check, the polkit rule is the first by name, and the policy file parses.
