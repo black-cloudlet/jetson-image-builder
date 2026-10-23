@@ -1,0 +1,78 @@
+{
+  "policies": {
+    "DisableAppUpdate": true,
+    "DisableSystemAddonUpdate": true,
+    "ExtensionUpdate": false,
+    "DisableTelemetry": true,
+    "DisableFirefoxStudies": true,
+    "DisablePocket": true,
+    "DisableFeedbackCommands": true,
+    "DisableDeveloperTools": true,
+    "DisablePrivateBrowsing": true,
+    "DisableProfileImport": true,
+    "BlockAboutConfig": true,
+    "BlockAboutProfiles": true,
+    "BlockAboutAddons": true,
+    "DontCheckDefaultBrowser": true,
+    "NoDefaultBookmarks": true,
+    "OverrideFirstRunPage": "",
+    "OverridePostUpdatePage": "",
+    "PasswordManagerEnabled": false,
+    "OfferToSaveLogins": false,
+    "DisableFormHistory": true,
+    "CaptivePortal": false,
+    "NetworkPrediction": false,
+    "WebsiteFilter": {
+      "Block": [
+        "file:///*"
+      ]
+    },
+    "DNSOverHTTPS": {
+      "Enabled": false,
+      "Locked": true
+    },
+    "UserMessaging": {
+      "ExtensionRecommendations": false,
+      "FeatureRecommendations": false,
+      "UrlbarInterventions": false,
+      "SkipOnboarding": true,
+      "MoreFromMozilla": false,
+      "Locked": true
+    },
+    "Preferences": {
+      "browser.cache.disk.enable": {
+        "Value": false,
+        "Status": "locked"
+      },
+      "browser.sessionstore.resume_from_crash": {
+        "Value": false,
+        "Status": "locked"
+      },
+      "browser.safebrowsing.malware.enabled": {
+        "Value": false,
+        "Status": "locked"
+      },
+      "browser.safebrowsing.phishing.enabled": {
+        "Value": false,
+        "Status": "locked"
+      },
+      "browser.safebrowsing.downloads.enabled": {
+        "Value": false,
+        "Status": "locked"
+      },
+      "media.gmp-manager.updateEnabled": {
+        "Value": false,
+        "Status": "locked"
+      }
+    },
+    "DisableSafeMode": true,
+    "DisableProfileRefresh": true,
+    "BlockAboutSupport": true,
+    "PrintingEnabled": false,
+    "ExtensionSettings": {
+      "*": {
+        "installation_mode": "blocked"
+      }
+    }
+  }
+}
