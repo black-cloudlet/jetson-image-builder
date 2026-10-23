@@ -194,8 +194,21 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   too, a later hash in a new image reaches no installed node, and a `passwd kiosk` on a node is
   never undone. The credential is systemd ≥ 249 (RHEL 9 has 252); seen working on 255 only.
   `sshd_config.d/40-jetson-kiosk.conf` says `DenyUsers kiosk`: RHEL's sshd takes passwords, and
-  the screen password must not open a shell over the network. The text consoles (Ctrl-Alt-Fn)
-  still take it. `tmpfiles.d` creates its home, links
+  the screen password must not open a shell over the network. **No way out** (asked for by the
+  maintainer; all configuration): `/etc/pam.d/login` gets `pam_succeed_if.so user != kiosk` as
+  its first `account` line, so the text consoles (Ctrl-Alt-Fn) and the serial `ttyTCU0` refuse
+  `kiosk` while `cloudlet` still logs in there; GDM uses `gdm-password`, untouched. First,
+  because a `sufficient` line in an included stack would end it early (RHEL's `system-auth`
+  account has none today). `nologin` as the shell was not an option: GDM starts the session
+  through it. `/usr/share/polkit-1/rules.d/10-jetson-kiosk.rules` answers NO to every polkit
+  action for `kiosk` (an active local session may otherwise reboot, change system network
+  settings, `pkexec`); `10-` so it is the first rule by name across `/etc` and `/usr/share`,
+  which is the order polkit asks them in. `kiosk` is in no group but its own, so no `sudo`.
+  Not done: a confined SELinux user (`user_u`, `user_exec_content` off) would also stop it
+  running what it downloads, but whether a confined user can open the Tegra display and GPU
+  nodes is unknown, and `kiosk` exists only from first boot; revisit after hardware. Code
+  running as `kiosk` still has the node's network, and can fill `/var`. `tmpfiles.d` creates
+  its home, links
   `~/.local/bin/gnome-kiosk-script` (what `gnome-kiosk-script` execs) to
   `/usr/libexec/jetson-kiosk/gnome-kiosk-script`, writes
   `/var/lib/AccountsService/users/kiosk` with `Session=gnome-kiosk-script-wayland`, and marks
@@ -230,7 +243,10 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     OpenH264 downloads; no disk cache; no crash-restore page; `WebsiteFilter` blocks
     `file:///*` (a file picker would otherwise browse the disk; uploads through
     `<input type=file>` still work, which is the frontend's business); no devtools,
-    `about:config`, private windows. JSON has no comments, so the why is in the Containerfile.
+    `about:config`, private windows; no troubleshoot mode, profile refresh, `about:support`,
+    printing (its dialog has a file chooser) or extension installs. `about:preferences` has no
+    route in kiosk mode (no menu, no shortcut; web content cannot navigate to it), so it is not
+    filtered. JSON has no comments, so the why is in the Containerfile.
   - What the frontend must live with: **no H.264** (no decoder in RHEL's Firefox offline), no
     CDN or web fonts, and reconnecting its own streams.
   - **Tried and dropped as too complicated** (branch history): a custom `jetson-kiosk.service`
@@ -246,7 +262,10 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     AccountsService session names an
     installed `wayland-sessions` file, the linked script is executable and parses,
     `gnome-kiosk-script` still execs `~/.local/bin/gnome-kiosk-script`, `sshd_config` still
-    includes `sshd_config.d` (else `DenyUsers` is ignored silently), and the policy parses.
+    includes `sshd_config.d` (else `DenyUsers` is ignored silently), no terminal emulator or
+    file manager got pulled in, `kiosk` has no group but its own, `/etc/pam.d/login`'s first
+    `account` line refuses `kiosk`, `10-jetson-kiosk.rules` is the first polkit rule by name,
+    and the policy parses.
     Locally: the hash step against good, missing, empty, plaintext and multi-line input; sysusers
     with the credential and tmpfiles against a scratch root (the hash reaches `shadow`; an
     existing `kiosk` keeps its password; escapes expand, link lands), and the
@@ -440,10 +459,13 @@ hardware.
    `/dev/dri/card*`; `/run/gdm/custom.conf` without `WaylandEnable=false` (GDM's udev rules
    write it when they refuse Wayland on a driver, and with no X server installed nothing would
    start: that is the case for `claude/kiosk-xorg-cpu`); GDM's login screen lists only `kiosk`,
-   the image's password logs in, `ssh kiosk@` is refused,
+   the image's password logs in, `ssh kiosk@` is refused, Ctrl-Alt-F3 and the serial console
+   refuse `kiosk` and take `cloudlet`, `nmcli con mod` and `systemctl reboot` as `kiosk` are
+   denied, `journalctl -b | grep -i polkit` shows nothing from the kiosk session breaking,
    `/usr/lib/jetson-kiosk/password-hash` is `0600 root`; Firefox opens on the URL; replug
    the cable and the picture returns; the screen does not blank; a USB keyboard, mouse and touch
    screen all drive the page, and whether the login screen offers an on-screen keyboard on touch;
+   Shift held while Firefox restarts opens no troubleshoot dialog, Ctrl-P prints nothing;
    `ausearch -m avc` clean; `about:support` for what Firefox draws with; `tegrastats` and
    Triton's p99 latency with the screen on and off. If the frontend plays H.264, it is a black
    box.

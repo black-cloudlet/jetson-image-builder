@@ -48,6 +48,23 @@ for cmd in firefox curl; do
 	command -v "$cmd" || fail "not on PATH: $cmd"
 done
 
+echo "== no way out of the session =="
+# A terminal or file manager pulled in as a dependency is one handler away.
+for app in gnome-terminal ptyxis kgx xterm konsole foot nautilus; do
+	! command -v "$app" >/dev/null || fail "$app is installed: a way out of the kiosk"
+done
+[[ $(id -Gn "$user") == "$user" ]] || fail "$user is in groups '$(id -Gn "$user")', not only its own"
+first=$(grep -m1 '^account' /etc/pam.d/login)
+[[ $first == *pam_succeed_if.so*"user != $user"* ]] \
+	|| fail "/etc/pam.d/login does not refuse $user first; its first account line: $first"
+# polkit takes the first rule that answers, by file name across both directories.
+rules=$({ find /etc/polkit-1/rules.d /usr/share/polkit-1/rules.d -name '*.rules' -printf '%f\n' 2>/dev/null || true; } | LC_ALL=C sort)
+[[ $(head -1 <<<"$rules") == 10-jetson-kiosk.rules ]] || {
+	echo "10-jetson-kiosk.rules is not the first polkit rule:"
+	echo "$rules"
+	exit 1
+}
+
 echo "== the kiosk password does not open ssh =="
 # A drop-in sshd never includes is ignored silently.
 grep -qx 'Include /etc/ssh/sshd_config.d/\*.conf' /etc/ssh/sshd_config || {

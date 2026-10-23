@@ -64,6 +64,15 @@
         "Value": false,
         "Status": "locked"
       }
+    },
+    "DisableSafeMode": true,
+    "DisableProfileRefresh": true,
+    "BlockAboutSupport": true,
+    "PrintingEnabled": false,
+    "ExtensionSettings": {
+      "*": {
+        "installation_mode": "blocked"
+      }
     }
   }
 }

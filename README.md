@@ -202,6 +202,24 @@ it does not travel over DisplayPort. Inside the session there is **no on-screen 
 neither GNOME Kiosk nor Firefox has one, so a touch-only screen cannot type into the frontend
 unless the frontend brings its own.
 
+**No way out of Firefox.** Someone at the screen with the kiosk password should get Firefox
+and nothing else:
+- **No shell.** `sshd` refuses `kiosk`, and so do the text consoles (Ctrl-Alt-F*n*) and the
+  serial console: `/etc/pam.d/login` refuses it before any other account check. `cloudlet`
+  still logs in at a console for maintenance. GDM's login uses a different PAM file, so the
+  screen is unaffected. The session has no terminal, run dialog or launcher, and the smoke test
+  fails if a terminal emulator or file manager ever gets installed.
+- **No privileges.** `kiosk` is in no group but its own, so no `sudo`. A polkit rule refuses it
+  every action, so it cannot reboot, change network settings or use `pkexec`, which an active
+  local user otherwise can.
+- **No way out of the page.** Firefox runs `--kiosk`, and its policy turns off troubleshoot
+  mode, profile refresh, `about:support`, `about:config`, developer tools, printing (the print
+  dialog has a file chooser), extension installs and `file://` pages.
+
+Not covered: code running as `kiosk` (a browser exploit, say) still has the node's network and
+can fill `/var`. A confined SELinux user would stop it running what it downloads; it waits on
+hardware, since whether a confined user can open the Tegra display and GPU devices is unknown.
+
 **Configuration.**
 - `/etc/jetson-kiosk.conf` holds `KIOSK_URL`. It is in `/etc` so one device can point elsewhere
   without a rebuild. The default, `http://jetson-1.cloudlet.local/`, is a placeholder until the
@@ -210,7 +228,7 @@ unless the frontend brings its own.
 - `/etc/firefox/policies/policies.json`: no updates, telemetry, studies or safe-browsing
   downloads (all would try the internet), no OpenH264 download, no disk cache, no crash-restore
   page, no `file://` pages (a file picker would otherwise browse the disk), no developer tools,
-  `about:config` or private windows.
+  `about:config` or private windows, and the escape hatches above.
 
 **What the frontend has to live with** on this screen: no H.264 video (RHEL's Firefox has no
 decoder for it, and the OpenH264 plugin is a download), nothing loaded from the internet, and
@@ -220,7 +238,9 @@ Its smoke test checks the node boots to GDM, then runs `systemd-sysusers` (with 
 credential) and `systemd-tmpfiles` inside the test container as a boot would, and checks the
 results agree: the hash file is `0600`, the `kiosk` user exists with that hash, the session its
 AccountsService file names is installed, the script is in
-place and parses, `sshd` reads the drop-in that refuses `kiosk`, and the policy file parses.
+place and parses, `sshd` reads the drop-in that refuses `kiosk`, no terminal emulator or file
+manager is installed, `kiosk` has no extra groups, the console PAM rule is the first account
+check, the polkit rule is the first by name, and the policy file parses.
 
 ### microshift: Kubernetes and the GPU
 
@@ -677,6 +697,7 @@ The design record, with every decision and why, is `CLAUDE.md`.
 | `kiosk/Containerfile` | layer 3: GDM, GNOME Kiosk, Firefox |
 | `kiosk/gnome-kiosk-script` | waits for a monitor and the URL, runs Firefox, closes it on unplug, restarts it with back-off |
 | `kiosk/sshd-deny-kiosk.conf` | `sshd` refuses `kiosk`: its password is for the screen only |
+| `kiosk/polkit-deny-kiosk.rules` | polkit refuses `kiosk` every action |
 | `kiosk/sysusers.conf`, `kiosk/tmpfiles.conf` | the `kiosk` user, its home and session |
 | `kiosk/sysusers-credential.conf` | hands the image's password hash to `systemd-sysusers` |
 | `kiosk/jetson-kiosk.conf` | `KIOSK_URL` |
