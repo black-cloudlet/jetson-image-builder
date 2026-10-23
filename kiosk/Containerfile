@@ -30,9 +30,8 @@ COPY kiosk/sysusers-credential.conf \
 COPY kiosk/tmpfiles.conf /usr/lib/tmpfiles.d/jetson-kiosk.conf
 COPY --chmod=0555 kiosk/gnome-kiosk-script /usr/libexec/jetson-kiosk/gnome-kiosk-script
 
-# No autologin: GDM asks for the kiosk password, which must not also open ssh
-# or a text or serial console. login's stack refuses kiosk before anything
-# else; GDM uses gdm-password, so the screen still logs in.
+# No autologin. The kiosk password opens neither ssh nor a console; GDM uses
+# gdm-password, not login.
 COPY kiosk/sshd-deny-kiosk.conf /etc/ssh/sshd_config.d/40-jetson-kiosk.conf
 RUN sed -i '0,/^account/s//account    required     pam_succeed_if.so quiet_success user != kiosk\n&/' \
         /etc/pam.d/login && \
@@ -44,7 +43,7 @@ COPY kiosk/polkit-deny-kiosk.rules /usr/share/polkit-1/rules.d/10-jetson-kiosk.r
 
 # JSON takes no comments: nothing that tries the internet, no disk cache
 # (eMMC), no file:// pages (a file picker would browse the disk), no way out of
-# the page: no troubleshoot mode, about:support, printing or extensions.
+# the page.
 COPY kiosk/policies.json /etc/firefox/policies/policies.json
 
 # /etc, so one device can point somewhere else without a rebuild.

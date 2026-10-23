@@ -49,7 +49,7 @@ for cmd in firefox curl; do
 done
 
 echo "== no way out of the session =="
-# A terminal or file manager pulled in as a dependency is one handler away.
+# A terminal or file manager is one handler away.
 for app in gnome-terminal ptyxis kgx xterm konsole foot nautilus; do
 	! command -v "$app" >/dev/null || fail "$app is installed: a way out of the kiosk"
 done
@@ -57,7 +57,7 @@ done
 first=$(grep -m1 '^account' /etc/pam.d/login)
 [[ $first == *pam_succeed_if.so*"user != $user"* ]] \
 	|| fail "/etc/pam.d/login does not refuse $user first; its first account line: $first"
-# polkit takes the first rule that answers, by file name across both directories.
+# polkit asks rules in name order, across both directories.
 rules=$({ find /etc/polkit-1/rules.d /usr/share/polkit-1/rules.d -name '*.rules' -printf '%f\n' 2>/dev/null || true; } | LC_ALL=C sort)
 [[ $(head -1 <<<"$rules") == 10-jetson-kiosk.rules ]] || {
 	echo "10-jetson-kiosk.rules is not the first polkit rule:"
