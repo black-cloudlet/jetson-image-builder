@@ -23,8 +23,7 @@ rootpw --lock
 user --name=cloudlet --groups=wheel --iscrypted --password=@JETSON_PASSWORD_HASH@
 sshkey --username=cloudlet "@JETSON_SSH_PUBKEY@"
 
-# The password typed on the kiosk's login screen. UID and GID match kiosk/sysusers.conf, which
-# then finds the user already there.
+# The kiosk login's password; UID and GID match kiosk/sysusers.conf.
 user --name=kiosk --uid=1500 --gid=1500 --gecos="Kiosk" --iscrypted --password=@JETSON_KIOSK_PASSWORD_HASH@
 
 reboot --eject

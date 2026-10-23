@@ -16,8 +16,7 @@ echo "== boots to GDM =="
 	|| fail "display-manager.service is not gdm.service"
 
 echo "== kiosk user and session =="
-# What the node does at boot, done here in a throwaway container: an escape
-# tmpfiles does not expand, or an owner sysusers did not create, shows now.
+# As a boot would: an unexpanded escape or a missing owner shows now.
 systemd-sysusers
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/jetson-kiosk.conf
 user=kiosk
