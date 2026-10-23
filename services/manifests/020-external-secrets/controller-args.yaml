@@ -1,8 +1,5 @@
-# Generic targets: lets an ExternalSecret write a ConfigMap instead of a
-# Secret, which is how 025 publishes the device CA. Off by default upstream,
-# and the flag alone is not enough: generic-targets.yaml grants the write.
-# Appended, so it survives whatever upstream adds to the list; a JSON patch
-# for the same reason as cert-controller-args.yaml.
+# Lets an ExternalSecret write a ConfigMap (025); generic-targets.yaml grants the
+# write. Appended, so it survives upstream adding arguments.
 - op: add
   path: /spec/template/spec/containers/0/args/-
   value: --unsafe-allow-generic-targets

@@ -1,13 +1,6 @@
-# Hop 1: cert-manager/device-ca (tls.crt, tls.key, ca.crt) to
-# cert-manager/device-ca-public (ca.crt). tls.crt, not ca.crt: they are the
-# same certificate while the CA is self-signed, but if it is ever signed by an
-# organisation root instead, ca.crt becomes that root and tls.crt stays this
-# node's CA, which is what its pods should trust.
-#
-# The Role names the one Secret, so the token ESO mints for this account reads
-# device-ca and nothing else in cert-manager. The SelfSubjectRulesReview the
-# store makes to validate itself needs no rule here: Kubernetes grants it to
-# every authenticated identity (system:basic-user).
+# Hop 1: device-ca to device-ca-public, tls.crt only, read as an account whose
+# Role names that one Secret. tls.crt, not ca.crt: if an organisation root ever
+# signs this CA, ca.crt becomes that root.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -39,8 +32,6 @@ subjects:
     name: device-ca-exporter
     namespace: cert-manager
 ---
-# The local API server, through the Service every pod uses, verified against the
-# CA in kube-root-ca.crt, as in-cluster clients do.
 apiVersion: external-secrets.io/v1
 kind: SecretStore
 metadata:
@@ -59,8 +50,7 @@ spec:
         serviceAccount:
           name: device-ca-exporter
 ---
-# `property` is what keeps tls.key out: without it the provider returns every
-# key of the Secret as one JSON value.
+# `property` keeps tls.key out: without it every key comes back.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:

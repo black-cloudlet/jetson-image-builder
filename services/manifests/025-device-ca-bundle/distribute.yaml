@@ -1,6 +1,5 @@
-# Hop 2: cert-manager/device-ca-public to ConfigMap device-ca.crt in every
-# namespace. The reader's Role names only the public copy; the smoke test fails
-# if any account a ClusterSecretStore here uses can read device-ca itself.
+# Hop 2: device-ca-public to ConfigMap device-ca.crt in every namespace, read as
+# an account whose Role names only the public copy.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -32,9 +31,8 @@ subjects:
     name: device-ca-bundle-reader
     namespace: cert-manager
 ---
-# No `conditions`: every namespace may use it, which the ClusterExternalSecret
-# needs. A cluster store names its namespaces explicitly, or ESO would look for
-# the account and the CA ConfigMap in each ExternalSecret's own namespace.
+# No `conditions`: every namespace uses it, and it reaches only the public copy.
+# Namespaces spelled out, or ESO would resolve them per ExternalSecret.
 apiVersion: external-secrets.io/v1
 kind: ClusterSecretStore
 metadata:
@@ -54,15 +52,7 @@ spec:
           name: device-ca-bundle-reader
           namespace: cert-manager
 ---
-# One empty selector matches every namespace, present and future: ESO lists
-# namespaces again every refreshTime (1m by default) and adds an ExternalSecret
-# to each new one, so a namespace has the ConfigMap within a minute of being
-# created, kube-system and openshift-* included. Not a pod-visible change for
-# anyone who does not mount it.
-#
-# The ConfigMap is owned by its ExternalSecret, which ESO labels
-# externalsecrets.external-secrets.io/managed and puts back if edited by hand.
-# A CA renewal reaches every namespace within two refreshIntervals.
+# {} matches every namespace; new ones are picked up within refreshTime (1m).
 apiVersion: external-secrets.io/v1
 kind: ClusterExternalSecret
 metadata:

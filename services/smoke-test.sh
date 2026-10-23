@@ -158,14 +158,11 @@ csc=$(jq -r '.[] | select(.kind == "ClusterStorageContainer") | .metadata.name' 
 echo "   no ClusterStorageContainer"
 
 echo "== device CA =="
-# 015 and 025 are written here, not upstream, so the risk is not drift but
-# disagreement: a name one root spells differently from another, or from
-# cert-manager, shows only on hardware, as a Certificate or ExternalSecret that
-# never goes Ready.
+# 015 and 025 are ours, so the risk is two files disagreeing on a name, which
+# shows only on hardware.
 ca=$render/015-device-ca.json
 bundle=$render/025-device-ca-bundle.json
-# A ClusterIssuer reads its Secret from the controller's cluster resource
-# namespace, which upstream sets to the namespace it runs in.
+# A ClusterIssuer reads Secrets from the controller's cluster resource namespace.
 crn=$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "cert-manager")
 	| .metadata.namespace as $ns | .spec.template.spec.containers[0].args[]
 	| select(startswith("--cluster-resource-namespace="))
@@ -193,11 +190,9 @@ read -r ca_ns ca_secret < <(jq -r '.[] | select(.kind == "Certificate" and .spec
 	| "\(.metadata.namespace) \(.spec.secretName)"' "$ca")
 echo "   $ca_ns/$ca_secret: self-signed, read by a ClusterIssuer from $crn"
 
-# The private key is in that Secret. Only an ExternalSecret in its namespace,
-# through a namespaced SecretStore, may read it, and only a certificate field:
-# no property, or a dataFrom extract, returns tls.key along with the rest. And
-# no account a ClusterSecretStore authenticates as, which any namespace can
-# name, may be able to read it at all. Bindings outside this root are not seen.
+# That Secret holds the key: only a namespaced store in its namespace may read
+# it, one certificate field at a time, and no account a ClusterSecretStore uses
+# may read it at all. Only bindings in this root are seen.
 out=$(jq -r --arg ns "$ca_ns" --arg s "$ca_secret" '
 	. as $all
 	| def secret_rules($sa): $all[]
@@ -226,9 +221,8 @@ out=$(jq -r --arg ns "$ca_ns" --arg s "$ca_secret" '
 [[ -z $out ]] || fail "$out"
 echo "   $ca_secret: read by name, one certificate field, through a namespaced store only"
 
-# What the ClusterExternalSecret reads must be granted to its store's account
-# by name, and be the public copy some ExternalSecret writes; otherwise every
-# namespace gets an ExternalSecret stuck on Forbidden or not found.
+# Its keys must be granted by name and written by some ExternalSecret, or the
+# copy in every namespace fails.
 out=$(jq -r '. as $all
 	| .[] | select(.kind == "ClusterExternalSecret") | "\(.kind)/\(.metadata.name)" as $o
 	| .spec.externalSecretSpec as $spec
@@ -253,8 +247,7 @@ out=$(jq -r '. as $all
 [[ -z $out ]] || fail "$out"
 echo "   ClusterExternalSecret reads only the public copy, granted by name"
 
-# A ConfigMap target needs the controller flag and the write; without either,
-# ESO reports an error on an ExternalSecret in every namespace.
+# A ConfigMap target needs both the controller flag and the write.
 if jq -e 'any(.[]; (.spec.target.manifest // .spec.externalSecretSpec.target.manifest) != null)' \
 	"$bundle" >/dev/null; then
 	jq -e '.[] | select(.kind == "Deployment" and .metadata.name == "external-secrets")

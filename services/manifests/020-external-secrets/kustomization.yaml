@@ -16,9 +16,8 @@
 # run before the namespace transformer, so they select each resource as the
 # upstream file still spells it.
 #
-# controller-args.yaml and generic-targets.yaml turn on generic targets, so an
-# ExternalSecret can write a ConfigMap; 025-device-ca-bundle is the one that
-# does.
+# controller-args.yaml and generic-targets.yaml let an ExternalSecret write a
+# ConfigMap (025).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: external-secrets

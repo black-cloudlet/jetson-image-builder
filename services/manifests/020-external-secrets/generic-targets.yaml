@@ -1,10 +1,5 @@
-# Upstream's controller role may only read ConfigMaps; this is the write the
-# generic-targets flag needs, as upstream's Helm chart grants it under
-# genericTargets.enabled. Cluster-wide, because a ClusterExternalSecret writes
-# into every namespace. ConfigMaps only: no other generic target kind is used.
-#
-# The subject says external-secrets, where this root moves the controller's
-# ServiceAccount; the smoke test fails on any `default` left in the render.
+# The ConfigMap write the generic-targets flag needs; upstream's role only reads.
+# Cluster-wide, because 025 writes into every namespace.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
