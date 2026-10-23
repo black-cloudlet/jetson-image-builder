@@ -165,8 +165,12 @@ The file name and the image name differ: `Containerfile.podman` builds the image
 Red Hat's documented kiosk setup, nothing more:
 
 1. The node boots to `graphical.target`, so **GDM** starts.
-2. GDM logs the **`kiosk`** user in automatically (`/etc/gdm/custom.conf`). The user comes from
-   `sysusers.d` (UID 1500, password locked).
+2. GDM shows its login screen with one user, **`kiosk`**; someone types its password. The
+   password comes from the kickstart (`JETSON_KIOSK_PASSWORD_HASH`), which creates the user with
+   UID 1500. `sysusers.d` declares the same user, so an image switched onto a node that never ran
+   that kickstart still has it, locked until `passwd kiosk`. The admin user `cloudlet` is hidden
+   from the login screen, and `sshd` refuses `kiosk`: the password is for the screen only.
+   Once logged in the session stays open until reboot: GNOME Kiosk has no screen lock.
 3. The session is **GNOME Kiosk's script session** (`gnome-kiosk-script-wayland`, set in the
    user's AccountsService file). GNOME Kiosk is the compositor; it makes every window fullscreen
    and lights a monitor whenever one is plugged in.
@@ -183,7 +187,17 @@ The kiosk user's home and the AccountsService file are in `/var`, so they come f
 `tmpfiles.d`, created at boot; anything put in `/var` at build time is not deployed.
 
 Drawing goes through GNOME Kiosk's and Firefox's defaults: the GPU where the drivers allow it.
-It runs outside Kubernetes, so the device plugin does not count it.
+The vendor image carries the display driver (`nvidia-drm`, loaded by its `load-nvidia-drm.service`
+under `graphical.target`) and NVIDIA's EGL, GBM and Wayland EGL libraries. Video is decoded on the
+CPU either way. It runs outside Kubernetes, so the device plugin does not count it.
+
+**Input.** USB keyboards and mice work, plugged in at any time (`usbhid`, `hid-generic` and
+`evdev` are built into the kernel; GNOME Kiosk reads them through libinput). The layout is the
+kickstart's `us`. Touch works for HID touch screens, which is nearly every current USB one
+(`hid-multitouch`; `wacom` and `hid-elan` also ship); touch needs the monitor's USB cable, since
+it does not travel over DisplayPort. Inside the session there is **no on-screen keyboard**:
+neither GNOME Kiosk nor Firefox has one, so a touch-only screen cannot type into the frontend
+unless the frontend brings its own.
 
 **Configuration.**
 - `/etc/jetson-kiosk.conf` holds `KIOSK_URL`. It is in `/etc` so one device can point elsewhere
@@ -200,9 +214,9 @@ decoder for it, and the OpenH264 plugin is a download), nothing loaded from the 
 reconnecting its own streams, since nobody can press reload.
 
 Its smoke test checks the node boots to GDM, then runs `systemd-sysusers` and
-`systemd-tmpfiles` inside the test container as a boot would, and checks the results agree: GDM's
-autologin user exists, the session it names is installed, the script is in place and parses, and
-the policy file parses.
+`systemd-tmpfiles` inside the test container as a boot would, and checks the results agree: the
+`kiosk` user exists, the session its AccountsService file names is installed, the script is in
+place and parses, `sshd` reads the drop-in that refuses `kiosk`, and the policy file parses.
 
 ### microshift: Kubernetes and the GPU
 
@@ -416,8 +430,8 @@ Every layer is published under these tags, all naming the same manifest:
 ### The ISO (`build-iso.yml`)
 
 1. Register, move storage onto `/scratch`, log in to GHCR and `registry.redhat.io`.
-2. Render `config.toml`, substituting `@JETSON_SSH_PUBKEY@` and
-   `@JETSON_PASSWORD_HASH@` in bash (not `sed`, which breaks on `&`, quotes and newlines). It
+2. Render `config.toml`, substituting `@JETSON_SSH_PUBKEY@`, `@JETSON_PASSWORD_HASH@` and
+   `@JETSON_KIOSK_PASSWORD_HASH@` in bash (not `sed`, which breaks on `&`, quotes and newlines). It
    first rejects an empty value, a line break, a password that is not a `$6$…` crypt hash, and
    a key that is not an OpenSSH public key. Each of those would otherwise produce an ISO nobody
    can log into.
@@ -440,6 +454,7 @@ if that kernel has the `sdhci-tegra` driver. If the installer finds no disk, che
 | `RH_REGISTRY_USER` / `RH_REGISTRY_PASSWORD` | Pull `registry.redhat.io/rhel9/bootc-image-builder` |
 | `JETSON_SSH_PUBKEY` | Public key for the `cloudlet` user (the key itself, not a path) |
 | `JETSON_PASSWORD_HASH` | `openssl passwd -6` output for `cloudlet`: the hash, not the password |
+| `JETSON_KIOSK_PASSWORD_HASH` | `openssl passwd -6` output for `kiosk`, typed on the screen's login: the hash, not the password |
 
 The services layer's images (`quay.io/jetstack`, `oci.external-secrets.io`, `docker.io/kserve`,
 `quay.io/brancz`, `nvcr.io/nvidia`) are public and pulled anonymously.
@@ -507,6 +522,7 @@ reboots ejecting the media.
    ```
    lsmod | grep -E 'nvidia_drm|nvidia_modeset'   # the display driver; without it nothing shows
    cat /sys/class/drm/card*-*/status             # flips to connected/disconnected with the cable
+   cat /run/gdm/custom.conf                      # WaylandEnable=false: GDM refused Wayland here
    systemctl status gdm                          # the kiosk user's session under it
    tegrastats                                    # GR3D_FREQ: the screen's share of the GPU
    ```
@@ -594,7 +610,8 @@ sudo podman run --rm -i localhost/jetson-orin-bootc-services:dev bash -s < servi
 
 # ISO
 sed -e "s|@JETSON_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
-    -e "s|@JETSON_PASSWORD_HASH@|$(openssl passwd -6)|" config.toml > /tmp/config.toml
+    -e "s|@JETSON_PASSWORD_HASH@|$(openssl passwd -6)|" \
+    -e "s|@JETSON_KIOSK_PASSWORD_HASH@|$(openssl passwd -6)|" config.toml > /tmp/config.toml
 mkdir -p output
 sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfined_t \
   -v /tmp/config.toml:/config.toml:ro -v ./output:/output \
@@ -634,9 +651,9 @@ Give every container requests and limits at the house ratios, keep it admissible
   in `/etc/ostree/auth.json`.
 - **The address and hostname are per ISO, not per device.**
 - **No node is connected to Edge Manager.** Nothing writes `/etc/flightctl/config.yaml` yet.
-- **The kiosk is unverified on hardware.** Whether the base image carries the Jetson display
-  driver, what GNOME Kiosk and Firefox draw with on it, and what the screen costs the model all
-  need the device. `KIOSK_URL` is a placeholder.
+- **The kiosk is unverified on hardware.** The vendor image carries NVIDIA's display driver and
+  its EGL/GBM libraries, but whether GDM runs Wayland on them, what Firefox draws with, and what
+  the screen costs the model all need the device. `KIOSK_URL` is a placeholder.
 
 The design record, with every decision and why, is `CLAUDE.md`.
 
@@ -654,7 +671,7 @@ The design record, with every decision and why, is `CLAUDE.md`.
 | `base/physically-bound-images/copy-embedded-images.service` | runs it once per boot, before MicroShift |
 | `kiosk/Containerfile` | layer 3: GDM, GNOME Kiosk, Firefox |
 | `kiosk/gnome-kiosk-script` | waits for a monitor and the URL, runs Firefox, closes it on unplug, restarts it with back-off |
-| `kiosk/gdm-custom.conf` | GDM logs `kiosk` in automatically |
+| `kiosk/sshd-deny-kiosk.conf` | `sshd` refuses `kiosk`: its password is for the screen only |
 | `kiosk/sysusers.conf`, `kiosk/tmpfiles.conf` | the `kiosk` user, its home and session |
 | `kiosk/jetson-kiosk.conf` | `KIOSK_URL` |
 | `kiosk/policies.json` | Firefox lockdown |

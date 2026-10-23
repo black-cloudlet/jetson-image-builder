@@ -20,8 +20,8 @@ echo "== kiosk user and session =="
 # tmpfiles does not expand, or an owner sysusers did not create, shows now.
 systemd-sysusers
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/jetson-kiosk.conf
-user=$(sed -n 's/^AutomaticLogin=//p' /etc/gdm/custom.conf)
-id "$user" || fail "GDM logs in '$user', which sysusers did not create"
+user=kiosk
+id "$user" || fail "sysusers did not create $user"
 
 session=$(sed -n 's/^Session=//p' "/var/lib/AccountsService/users/$user")
 [[ -f /usr/share/wayland-sessions/$session.desktop ]] || {
@@ -38,6 +38,14 @@ grep -q '.local/bin/gnome-kiosk-script' "$(command -v gnome-kiosk-script)" \
 for cmd in firefox curl; do
 	command -v "$cmd" || fail "not on PATH: $cmd"
 done
+
+echo "== the kiosk password does not open ssh =="
+# A drop-in sshd never includes is ignored silently.
+grep -qx 'Include /etc/ssh/sshd_config.d/\*.conf' /etc/ssh/sshd_config || {
+	echo "/etc/ssh/sshd_config does not include sshd_config.d, so DenyUsers $user is ignored:"
+	grep -n '^Include' /etc/ssh/sshd_config || true
+	exit 1
+}
 
 echo "== firefox policies =="
 # A policies.json that does not parse is ignored whole, silently.

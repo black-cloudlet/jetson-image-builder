@@ -1,7 +1,8 @@
 # Layer 3, shared: the frontend in Firefox, fullscreen on the DisplayPort
-# output. Red Hat's documented kiosk setup: GDM logs the kiosk user in, GNOME
-# Kiosk's script session starts, and the script opens Firefox. Below the
-# Kubernetes variant, because nothing here is about the cluster.
+# output. Red Hat's documented kiosk setup: the kiosk user logs in on GDM's
+# login screen, GNOME Kiosk's script session starts, and the script opens
+# Firefox. Below the Kubernetes variant, because nothing here is about the
+# cluster.
 ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-bound-images:latest
 FROM ${BASE_IMAGE}
 
@@ -19,8 +20,10 @@ COPY kiosk/sysusers.conf /usr/lib/sysusers.d/jetson-kiosk.conf
 COPY kiosk/tmpfiles.conf /usr/lib/tmpfiles.d/jetson-kiosk.conf
 COPY --chmod=0555 kiosk/gnome-kiosk-script /usr/libexec/jetson-kiosk/gnome-kiosk-script
 
-# Log the kiosk user in at boot, with no login screen.
-COPY kiosk/gdm-custom.conf /etc/gdm/custom.conf
+# No GDM autologin: the kiosk password, set by the kickstart, is typed on GDM's
+# login screen. That password must not also open a shell over the network,
+# and RHEL's sshd takes passwords.
+COPY kiosk/sshd-deny-kiosk.conf /etc/ssh/sshd_config.d/40-jetson-kiosk.conf
 
 # JSON takes no comments, so the why is here: no updates, telemetry, studies,
 # safe browsing or OpenH264 download (all would try the internet), no disk

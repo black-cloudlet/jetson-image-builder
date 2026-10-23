@@ -182,19 +182,39 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
 - `kiosk/Containerfile` — **written, built by nothing yet, unverified on hardware.** Red Hat's
   documented kiosk, kept deliberately plain: `dnf install gdm gnome-kiosk-script-session firefox
   dejavu-sans-fonts` (DejaVu covers Hebrew), `systemctl enable gdm`, `set-default
-  graphical.target`. GDM autologins `kiosk` (`/etc/gdm/custom.conf`); the user is `sysusers.d`
-  (UID 1500: a regular user like any GDM login, above `cloudlet`; password locked; a shell,
-  because GDM starts the session through it). `tmpfiles.d` creates its home, links
+  graphical.target`. **No autologin**: GDM's login screen asks for `kiosk`'s password (the
+  maintainer's call). The kickstart creates `kiosk` with it (`--uid=1500 --gid=1500`,
+  `JETSON_KIOSK_PASSWORD_HASH`); `sysusers.d` declares the same user (UID 1500: a regular user
+  like any GDM login, above `cloudlet`; a shell, because GDM starts the session through it), a
+  no-op on an installed node, and locked on one switched onto this image without that kickstart.
+  `sshd_config.d/40-jetson-kiosk.conf` says `DenyUsers kiosk`: RHEL's sshd takes passwords, and
+  the screen password must not open a shell over the network. The text consoles (Ctrl-Alt-Fn)
+  still take it. `tmpfiles.d` creates its home, links
   `~/.local/bin/gnome-kiosk-script` (what `gnome-kiosk-script` execs) to
-  `/usr/libexec/jetson-kiosk/gnome-kiosk-script`, and writes
-  `/var/lib/AccountsService/users/kiosk` with `Session=gnome-kiosk-script-wayland`: all `/var`,
-  which the image does not deploy. The script sources `/etc/jetson-kiosk.conf` and loops: wait
+  `/usr/libexec/jetson-kiosk/gnome-kiosk-script`, writes
+  `/var/lib/AccountsService/users/kiosk` with `Session=gnome-kiosk-script-wayland`, and marks
+  `cloudlet` `SystemAccount=true` so the login screen lists only `kiosk`: all `/var`, which the
+  image does not deploy. Once logged in, the session stays until reboot: GNOME Kiosk has no
+  screen lock, and idle lock was offered and declined (custom code). The script sources
+  `/etc/jetson-kiosk.conf` and loops: wait
   for any DRM connector `connected` (sysfs, every 2 s; no monitor, no Firefox decoding video),
   wait until `KIOSK_URL` answers anything but a 5xx (`curl -k`, reachability only), run
   `firefox --kiosk` in the background and kill it after 10 s without a monitor, then restart
   after 1 s, or with back-off (2, 4 … 60 s) when Firefox died on its own within a minute. A
   `while` loop rather than the template's `exec "$0"`, so the back-off survives a restart.
   Rendering is the defaults: GPU where the drivers allow, unmetered against Triton.
+  - **The vendor image has the display stack** (inspected 2026-10-21): `nvidia.ko`,
+    `nvidia-modeset.ko`, `nvidia-drm.ko` under `updates/opensrc-disp/`, `nvidia-drm modeset=1
+    fbdev=1`, NVIDIA's EGL vendor file, `libnvidia-egl-gbm`, `libnvidia-egl-wayland`,
+    `gbm/nvidia-drm_gbm.so`, and an Xorg `nvidia_drv.so` with no X server.
+    `load-nvidia-drm.service` is `WantedBy=graphical.target` and the vendor sets
+    `multi-user.target`, so the display driver loads only because this layer switches the
+    target. Video decode is CPU either way (no VA-API on Tegra).
+  - **Input**: `usbhid`, `hid-generic`, `evdev` built in; `hid-multitouch`, `wacom`, `hid-elan`
+    as modules, so USB keyboards, mice and HID touch screens work through libinput; non-HID
+    touch controllers (`CONFIG_INPUT_TOUCHSCREEN` off) do not. Layout `us` from the kickstart.
+    No on-screen keyboard in the session (GNOME Kiosk and Firefox have none): a touch-only
+    screen needs the frontend's own. Whether GDM's login screen offers one on touch is unverified.
   - `/etc/jetson-kiosk.conf`: `KIOSK_URL`, a **placeholder** (`http://jetson-1.cloudlet.local/`)
     until the frontend's Route host is known. It resolves only through the network's DNS since
     the `%post` `/etc/hosts` line went; the real host must resolve with the cable out. HTTPS
@@ -215,10 +235,12 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     refuses Wayland on NVIDIA or GNOME will not start on the Jetson's display stack.
   - Smoke test: default target `graphical.target` and `display-manager.service` → gdm; then it
     runs `systemd-sysusers` and `systemd-tmpfiles --create` in the throwaway test container, as
-    a boot would, and checks GDM's autologin user exists, the AccountsService session names an
+    a boot would, and checks `kiosk` exists, the AccountsService session names an
     installed `wayland-sessions` file, the linked script is executable and parses,
-    `gnome-kiosk-script` still execs `~/.local/bin/gnome-kiosk-script`, and the policy parses.
-    Locally: sysusers/tmpfiles run against a scratch root (escapes expand, link lands), and the
+    `gnome-kiosk-script` still execs `~/.local/bin/gnome-kiosk-script`, `sshd_config` still
+    includes `sshd_config.d` (else `DenyUsers` is ignored silently), and the policy parses.
+    Locally: sysusers/tmpfiles run against a scratch root (escapes expand, link lands; with a
+    kickstart-made `kiosk` already in `passwd`, sysusers changes nothing), and the
     script against a fake DRM sysfs, stub Firefoxes and a local server: no monitor → nothing;
     plug → Firefox in 1 s; unplug → SIGTERM 10 s later; replug → back; a Firefox that exits at
     once → restarts after 2, 4, 8, 16 s.
@@ -317,7 +339,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `ignoredisk --only-use=mmcblk0`, `clearpart --all`, `reqpart --add-boot`, VG `rhel` with a
   40 GiB xfs root, **no swap**, and **~16.5 GiB left free for LVMS** (fill the VG and the
   cluster has no dynamic PVs). Root locked; user `cloudlet` in `wheel` from
-  `@JETSON_SSH_PUBKEY@`/`@JETSON_PASSWORD_HASH@`; `reboot --eject`. ISO label
+  `@JETSON_SSH_PUBKEY@`/`@JETSON_PASSWORD_HASH@`; user `kiosk` (UID/GID 1500, matching
+  `kiosk/sysusers.conf`) from `@JETSON_KIOSK_PASSWORD_HASH@`; `reboot --eject`. ISO label
   `JETSON_ORIN_BOOTC`. Address and hostname are baked in, so two devices from
   one ISO collide. No `%post`: the extra API SAN and the `/etc/hosts` entry were removed, so
   the laptop reaches 6443 through an SSH tunnel with the loopback kubeconfig.
@@ -364,8 +387,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
 
 **Secrets**: `RH_REGISTRY_USER`/`RH_REGISTRY_PASSWORD` (bib pull), `RHSM_USERNAME`/`RHSM_PASSWORD`
 (every job registers, and unregisters in `if: always()`), `OPENSHIFT_PULL_SECRET` (build-time
-image pulls, never in the image), `JETSON_SSH_PUBKEY`, `JETSON_PASSWORD_HASH`
-(`openssl passwd -6`). Registration replaced an entitlement-cert tarball. Username/password is
+image pulls, never in the image), `JETSON_SSH_PUBKEY`, `JETSON_PASSWORD_HASH` and
+`JETSON_KIOSK_PASSWORD_HASH` (`openssl passwd -6`, for `cloudlet` and the kiosk login). Registration replaced an entitlement-cert tarball. Username/password is
 maintainer preference; an org ID + activation key is narrower and needed for SSO/2FA accounts.
 Credentials go through `env:`. With Simple Content Access off, register needs `--auto-attach`.
 The subscription needs OpenShift and ACM entitlements, or `rhocp` and `rhacm` never appear. A self-hosted registered RHEL 9 aarch64 runner would remove registration entirely.
@@ -405,11 +428,15 @@ hardware.
    InferenceService or CRI-O's `device_ownership_from_security_context`). Then `oci://` with an
    embedded modelcar image, proving the `uidModelcar` change.
 6. Kiosk, with a monitor on DP: `lsmod | grep -E 'nvidia_drm|nvidia_modeset'` and
-   `/dev/dri/card*` (no display driver = nothing shows; adding NVIDIA's display package is a
-   maintainer decision); GDM logs `kiosk` in and Firefox opens on the URL; replug the cable and
-   the picture returns; the screen does not blank; `ausearch -m avc` clean; `about:support` for
-   what Firefox draws with; `tegrastats` and Triton's p99 latency with the screen on and off.
-   If the frontend plays H.264, it is a black box.
+   `/dev/dri/card*`; `/run/gdm/custom.conf` without `WaylandEnable=false` (GDM's udev rules
+   write it when they refuse Wayland on a driver, and with no X server installed nothing would
+   start: that is the case for `claude/kiosk-xorg-cpu`); GDM's login screen lists only `kiosk`,
+   the kickstart's password logs in, `ssh kiosk@` is refused; Firefox opens on the URL; replug
+   the cable and the picture returns; the screen does not blank; a USB keyboard, mouse and touch
+   screen all drive the page, and whether the login screen offers an on-screen keyboard on touch;
+   `ausearch -m avc` clean; `about:support` for what Firefox draws with; `tegrastats` and
+   Triton's p99 latency with the screen on and off. If the frontend plays H.264, it is a black
+   box.
 7. Later layers `FROM` the k8s image: a `bootc switch` unit for the air-gapped registry,
    greenboot health checks, a signature policy in `/etc/containers/policy.json`.
 
@@ -422,7 +449,7 @@ node's origin, and whether `stable` moves on every green build or only after a h
 lowering kubelet's image GC thresholds below the eviction line (only matters once images are
 pulled); whether the `services/` resource sizes survive hardware (the ratios are enforced, the
 sizes are guesses); the kiosk's `KIOSK_URL`, what the screen costs Triton once measured, and
-the frontend's video codec and preview size.
+the frontend's video codec, preview size and on-screen keyboard.
 
 ## How to work in this repo
 
@@ -515,6 +542,7 @@ podman run --rm -i localhost/jetson-orin-bootc:dev bash -s < services/smoke-test
 # ISO from the top of the chain
 sed -e "s|@JETSON_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
     -e "s|@JETSON_PASSWORD_HASH@|$(openssl passwd -6)|" \
+    -e "s|@JETSON_KIOSK_PASSWORD_HASH@|$(openssl passwd -6)|" \
     config.toml > /tmp/config.toml
 sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfined_t \
   -v /tmp/config.toml:/config.toml:ro -v ./output:/output \
