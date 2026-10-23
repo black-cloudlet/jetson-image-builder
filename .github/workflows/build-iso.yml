@@ -93,7 +93,6 @@ jobs:
         env:
           JETSON_SSH_PUBKEY: ${{ secrets.JETSON_SSH_PUBKEY }}
           JETSON_PASSWORD_HASH: ${{ secrets.JETSON_PASSWORD_HASH }}
-          JETSON_KIOSK_PASSWORD_HASH: ${{ secrets.JETSON_KIOSK_PASSWORD_HASH }}
           CONFIG: ${{ inputs.config }}
         run: |
           check() {
@@ -101,13 +100,11 @@ jobs:
             case $2 in *[$'\n\r']*) echo "::error::$1 contains a line break; store it as a single line"; exit 1;; esac
           }
           check JETSON_SSH_PUBKEY "$JETSON_SSH_PUBKEY"
-          for name in JETSON_PASSWORD_HASH JETSON_KIOSK_PASSWORD_HASH; do
-            check "$name" "${!name}"
-            case ${!name} in
-              \$?*\$?*\$?*) ;;
-              *) echo "::error::$name is not a crypt hash (expected \$6\$salt\$hash from 'openssl passwd -6'); the kickstart says --iscrypted, so a plaintext value can never be logged in with"; exit 1;;
-            esac
-          done
+          check JETSON_PASSWORD_HASH "$JETSON_PASSWORD_HASH"
+          case $JETSON_PASSWORD_HASH in
+            \$?*\$?*\$?*) ;;
+            *) echo "::error::JETSON_PASSWORD_HASH is not a crypt hash (expected \$6\$salt\$hash from 'openssl passwd -6'); the kickstart says --iscrypted, so a plaintext value can never be logged in with"; exit 1;;
+          esac
           case $JETSON_SSH_PUBKEY in
             ssh-*|ecdsa-*|sk-*) ;;
             *) echo "::error::JETSON_SSH_PUBKEY is not an OpenSSH public key; it must be the contents of the .pub file, not a path to it"; exit 1;;
@@ -118,7 +115,6 @@ jobs:
           config=$(cat "$CONFIG")
           config=${config//@JETSON_SSH_PUBKEY@/$JETSON_SSH_PUBKEY}
           config=${config//@JETSON_PASSWORD_HASH@/$JETSON_PASSWORD_HASH}
-          config=${config//@JETSON_KIOSK_PASSWORD_HASH@/$JETSON_KIOSK_PASSWORD_HASH}
           install -m 600 /dev/null /tmp/config.toml
           printf '%s\n' "$config" > /tmp/config.toml
           if grep -q '@JETSON_' /tmp/config.toml; then

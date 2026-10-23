@@ -139,6 +139,15 @@ jobs:
           jq -e '.auths | length > 0' /tmp/pull-secret.json > /dev/null \
             || { echo "::error::OPENSHIFT_PULL_SECRET is not a pull secret with an .auths object"; exit 1; }
 
+      # Unlike the pull secret, this one is meant for the image: the kiosk layer
+      # copies it in and checks it. The other layers never mount it.
+      - name: Write kiosk password hash
+        env:
+          KIOSK_PASSWORD_HASH: ${{ secrets.JETSON_KIOSK_PASSWORD_HASH }}
+        run: |
+          install -m 600 /dev/null /tmp/kiosk-password-hash
+          printf '%s' "$KIOSK_PASSWORD_HASH" > /tmp/kiosk-password-hash
+
       - name: Build
         env:
           BUILD_ARGS: ${{ inputs.build-args }}
@@ -154,6 +163,7 @@ jobs:
           done
           podman build "${args[@]}" \
             --secret id=pullsecret,src=/tmp/pull-secret.json \
+            --secret id=kiosk_password_hash,src=/tmp/kiosk-password-hash \
             -f "${{ inputs.containerfile }}" .
 
       # Roughly what the deployment occupies on the node — the number the root LV

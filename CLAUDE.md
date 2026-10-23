@@ -183,10 +183,16 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   documented kiosk, kept deliberately plain: `dnf install gdm gnome-kiosk-script-session firefox
   dejavu-sans-fonts` (DejaVu covers Hebrew), `systemctl enable gdm`, `set-default
   graphical.target`. **No autologin**: GDM's login screen asks for `kiosk`'s password (the
-  maintainer's call). The kickstart creates `kiosk` with it (`--uid=1500 --gid=1500`,
-  `JETSON_KIOSK_PASSWORD_HASH`); `sysusers.d` declares the same user (UID 1500: a regular user
-  like any GDM login, above `cloudlet`; a shell, because GDM starts the session through it), a
-  no-op on an installed node, and locked on one switched onto this image without that kickstart.
+  maintainer's call). The password is **in the image**, not the kickstart (the maintainer's
+  call, knowing every registry holding the image then holds the hash): the build gets `JETSON_KIOSK_PASSWORD_HASH` as a `podman build --secret`, rejects an
+  empty, whitespace or non-crypt value as the layer's first step, and stores it
+  `/usr/lib/jetson-kiosk/password-hash`, `0600`. A `systemd-sysusers.service` drop-in
+  (`LoadCredential=passwd.hashed-password.kiosk:…`; RHEL's unit loads only root's) hands it to
+  sysusers, which sets it when it **creates** `kiosk` (UID 1500: a regular user like any GDM
+  login, above `cloudlet`; a shell, because GDM starts the session through it) and never touches
+  an existing user. So the first boot sets it, a node `bootc switch`ed onto the image gets it
+  too, a later hash in a new image reaches no installed node, and a `passwd kiosk` on a node is
+  never undone. The credential is systemd ≥ 249 (RHEL 9 has 252); seen working on 255 only.
   `sshd_config.d/40-jetson-kiosk.conf` says `DenyUsers kiosk`: RHEL's sshd takes passwords, and
   the screen password must not open a shell over the network. The text consoles (Ctrl-Alt-Fn)
   still take it. `tmpfiles.d` creates its home, links
@@ -234,13 +240,16 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     custom service) is kept as branch `claude/kiosk-xorg-cpu` (`9ba1b12`): the fallback if GDM
     refuses Wayland on NVIDIA or GNOME will not start on the Jetson's display stack.
   - Smoke test: default target `graphical.target` and `display-manager.service` → gdm; then it
-    runs `systemd-sysusers` and `systemd-tmpfiles --create` in the throwaway test container, as
-    a boot would, and checks `kiosk` exists, the AccountsService session names an
+    reads the hash file the drop-in names, fails unless it is `0600`, runs `systemd-sysusers`
+    with it as the credential and `systemd-tmpfiles --create` in the throwaway test container,
+    as a boot would, and checks `kiosk` exists with that hash in `/etc/shadow`, the
+    AccountsService session names an
     installed `wayland-sessions` file, the linked script is executable and parses,
     `gnome-kiosk-script` still execs `~/.local/bin/gnome-kiosk-script`, `sshd_config` still
     includes `sshd_config.d` (else `DenyUsers` is ignored silently), and the policy parses.
-    Locally: sysusers/tmpfiles run against a scratch root (escapes expand, link lands; with a
-    kickstart-made `kiosk` already in `passwd`, sysusers changes nothing), and the
+    Locally: the hash step against good, missing, empty, plaintext and multi-line input; sysusers
+    with the credential and tmpfiles against a scratch root (the hash reaches `shadow`; an
+    existing `kiosk` keeps its password; escapes expand, link lands), and the
     script against a fake DRM sysfs, stub Firefoxes and a local server: no monitor → nothing;
     plug → Firefox in 1 s; unplug → SIGTERM 10 s later; replug → back; a Firefox that exits at
     once → restarts after 2, 4, 8, 16 s.
@@ -339,8 +348,7 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `ignoredisk --only-use=mmcblk0`, `clearpart --all`, `reqpart --add-boot`, VG `rhel` with a
   40 GiB xfs root, **no swap**, and **~16.5 GiB left free for LVMS** (fill the VG and the
   cluster has no dynamic PVs). Root locked; user `cloudlet` in `wheel` from
-  `@JETSON_SSH_PUBKEY@`/`@JETSON_PASSWORD_HASH@`; user `kiosk` (UID/GID 1500, matching
-  `kiosk/sysusers.conf`) from `@JETSON_KIOSK_PASSWORD_HASH@`; `reboot --eject`. ISO label
+  `@JETSON_SSH_PUBKEY@`/`@JETSON_PASSWORD_HASH@`; `reboot --eject`. ISO label
   `JETSON_ORIN_BOOTC`. Address and hostname are baked in, so two devices from
   one ISO collide. No `%post`: the extra API SAN and the `/etc/hosts` entry were removed, so
   the laptop reaches 6443 through an SSH tunnel with the loopback kubeconfig.
@@ -387,8 +395,9 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
 
 **Secrets**: `RH_REGISTRY_USER`/`RH_REGISTRY_PASSWORD` (bib pull), `RHSM_USERNAME`/`RHSM_PASSWORD`
 (every job registers, and unregisters in `if: always()`), `OPENSHIFT_PULL_SECRET` (build-time
-image pulls, never in the image), `JETSON_SSH_PUBKEY`, `JETSON_PASSWORD_HASH` and
-`JETSON_KIOSK_PASSWORD_HASH` (`openssl passwd -6`, for `cloudlet` and the kiosk login). Registration replaced an entitlement-cert tarball. Username/password is
+image pulls, never in the image), `JETSON_SSH_PUBKEY`, `JETSON_PASSWORD_HASH`
+(`openssl passwd -6`), `JETSON_KIOSK_PASSWORD_HASH` (`openssl passwd -6`, the kiosk login; in
+the image, passed to every layer build and mounted only by `kiosk/`). Registration replaced an entitlement-cert tarball. Username/password is
 maintainer preference; an org ID + activation key is narrower and needed for SSO/2FA accounts.
 Credentials go through `env:`. With Simple Content Access off, register needs `--auto-attach`.
 The subscription needs OpenShift and ACM entitlements, or `rhocp` and `rhacm` never appear. A self-hosted registered RHEL 9 aarch64 runner would remove registration entirely.
@@ -431,7 +440,8 @@ hardware.
    `/dev/dri/card*`; `/run/gdm/custom.conf` without `WaylandEnable=false` (GDM's udev rules
    write it when they refuse Wayland on a driver, and with no X server installed nothing would
    start: that is the case for `claude/kiosk-xorg-cpu`); GDM's login screen lists only `kiosk`,
-   the kickstart's password logs in, `ssh kiosk@` is refused; Firefox opens on the URL; replug
+   the image's password logs in, `ssh kiosk@` is refused,
+   `/usr/lib/jetson-kiosk/password-hash` is `0600 root`; Firefox opens on the URL; replug
    the cable and the picture returns; the screen does not blank; a USB keyboard, mouse and touch
    screen all drive the page, and whether the login screen offers an on-screen keyboard on touch;
    `ausearch -m avc` clean; `about:support` for what Firefox draws with; `tegrastats` and
@@ -528,7 +538,9 @@ cd /opt/nvidia/Linux_for_Tegra && sudo ./flash.sh p3737-0000-p3701-0000-qspi ext
 sudo podman build -f base/Containerfile.base     -t localhost/jetson-base:dev .
 sudo podman build -f base/Containerfile.podman   -t localhost/jetson-podman:dev \
     --build-arg BASE_IMAGE=localhost/jetson-base:dev .
+openssl passwd -6 > /tmp/kiosk-hash   # the kiosk login's password
 sudo podman build -f kiosk/Containerfile         -t localhost/jetson-kiosk:dev \
+    --secret id=kiosk_password_hash,src=/tmp/kiosk-hash \
     --build-arg BASE_IMAGE=localhost/jetson-podman:dev .
 sudo podman build -f microshift/Containerfile    -t localhost/jetson-microshift:dev \
     --secret id=pullsecret,src=$HOME/pull-secret.json \
@@ -542,7 +554,6 @@ podman run --rm -i localhost/jetson-orin-bootc:dev bash -s < services/smoke-test
 # ISO from the top of the chain
 sed -e "s|@JETSON_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
     -e "s|@JETSON_PASSWORD_HASH@|$(openssl passwd -6)|" \
-    -e "s|@JETSON_KIOSK_PASSWORD_HASH@|$(openssl passwd -6)|" \
     config.toml > /tmp/config.toml
 sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfined_t \
   -v /tmp/config.toml:/config.toml:ro -v ./output:/output \

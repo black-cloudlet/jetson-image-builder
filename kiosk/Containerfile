@@ -4,6 +4,20 @@
 ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-bound-images:latest
 FROM ${BASE_IMAGE}
 
+# The kiosk password's hash, for sysusers to set when it creates kiosk. In the
+# image, so every registry holding it holds the hash (the maintainer's call);
+# root-only on the node. Checked first, before minutes of dnf.
+RUN --mount=type=secret,id=kiosk_password_hash \
+    hash=$(cat /run/secrets/kiosk_password_hash 2>/dev/null || true) && \
+    case $hash in \
+      *[[:space:]]*|'') echo "JETSON_KIOSK_PASSWORD_HASH is empty or has whitespace"; exit 1 ;; \
+      '$'?*'$'?*'$'?*) ;; \
+      *) echo "JETSON_KIOSK_PASSWORD_HASH is not a crypt hash (openssl passwd -6)"; exit 1 ;; \
+    esac && \
+    install -d -m 0755 /usr/lib/jetson-kiosk && \
+    install -m 0600 /dev/null /usr/lib/jetson-kiosk/password-hash && \
+    printf '%s' "$hash" > /usr/lib/jetson-kiosk/password-hash
+
 # DejaVu Sans covers Latin and Hebrew; the frontend must bundle any other font.
 RUN dnf install -y gdm gnome-kiosk-script-session firefox dejavu-sans-fonts && \
     systemctl enable gdm && \
@@ -13,11 +27,12 @@ RUN dnf install -y gdm gnome-kiosk-script-session firefox dejavu-sans-fonts && \
 # sysusers and tmpfiles, not useradd and files in /var: /var in the image is
 # not deployed.
 COPY kiosk/sysusers.conf /usr/lib/sysusers.d/jetson-kiosk.conf
+COPY kiosk/sysusers-credential.conf \
+     /usr/lib/systemd/system/systemd-sysusers.service.d/50-jetson-kiosk.conf
 COPY kiosk/tmpfiles.conf /usr/lib/tmpfiles.d/jetson-kiosk.conf
 COPY --chmod=0555 kiosk/gnome-kiosk-script /usr/libexec/jetson-kiosk/gnome-kiosk-script
 
-# No autologin: GDM asks for the kickstart's kiosk password, which must not
-# also open ssh.
+# No autologin: GDM asks for the kiosk password, which must not also open ssh.
 COPY kiosk/sshd-deny-kiosk.conf /etc/ssh/sshd_config.d/40-jetson-kiosk.conf
 
 # JSON takes no comments: nothing that tries the internet, no disk cache

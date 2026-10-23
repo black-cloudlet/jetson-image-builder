@@ -15,12 +15,22 @@ echo "== boots to GDM =="
 [[ $(readlink /etc/systemd/system/display-manager.service) == */gdm.service ]] \
 	|| fail "display-manager.service is not gdm.service"
 
-echo "== kiosk user and session =="
-# As a boot would: an unexpanded escape or a missing owner shows now.
-systemd-sysusers
-systemd-tmpfiles --create /usr/lib/tmpfiles.d/jetson-kiosk.conf
+echo "== kiosk user, password and session =="
+# As a boot would, the credential included: an unexpanded escape, a missing
+# owner, or a password that never reaches /etc/shadow shows now.
 user=kiosk
+dropin=/usr/lib/systemd/system/systemd-sysusers.service.d/50-jetson-kiosk.conf
+hash=$(sed -n "s/^LoadCredential=passwd.hashed-password.$user://p" "$dropin")
+[[ -f $hash ]] || fail "$dropin loads '$hash', which is not a file"
+[[ $(stat -c %a "$hash") == 600 ]] \
+	|| fail "$hash is mode $(stat -c %a "$hash"), not 600: any local user could read the hash"
+creds=$(mktemp -d)
+cp "$hash" "$creds/passwd.hashed-password.$user"
+CREDENTIALS_DIRECTORY=$creds systemd-sysusers
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/jetson-kiosk.conf
 id "$user" || fail "sysusers did not create $user"
+[[ $(getent shadow "$user" | cut -d: -f2) == "$(cat "$hash")" ]] \
+	|| fail "sysusers created $user without the password from $hash"
 
 session=$(sed -n 's/^Session=//p' "/var/lib/AccountsService/users/$user")
 [[ -f /usr/share/wayland-sessions/$session.desktop ]] || {

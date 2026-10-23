@@ -166,9 +166,12 @@ Red Hat's documented kiosk setup, nothing more:
 
 1. The node boots to `graphical.target`, so **GDM** starts.
 2. GDM shows its login screen with one user, **`kiosk`**; someone types its password. The
-   password comes from the kickstart (`JETSON_KIOSK_PASSWORD_HASH`), which creates the user with
-   UID 1500. `sysusers.d` declares the same user, so an image switched onto a node that never ran
-   that kickstart still has it, locked until `passwd kiosk`. The admin user `cloudlet` is hidden
+   password's hash is **in the image**: the build copies `JETSON_KIOSK_PASSWORD_HASH` into
+   `/usr/lib/jetson-kiosk/password-hash` (root-only), and `systemd-sysusers` sets it when it
+   creates `kiosk` (UID 1500) at first boot, or on a node switched onto the image. It never
+   changes an existing user: a new hash in a later image reaches no installed node, and a
+   `passwd kiosk` on a node stays. Anyone who can pull the image can read the hash, so the
+   GHCR packages and the air-gapped registry must be private. The admin user `cloudlet` is hidden
    from the login screen, and `sshd` refuses `kiosk`: the password is for the screen only.
    Once logged in the session stays open until reboot: GNOME Kiosk has no screen lock.
 3. The session is **GNOME Kiosk's script session** (`gnome-kiosk-script-wayland`, set in the
@@ -213,9 +216,10 @@ unless the frontend brings its own.
 decoder for it, and the OpenH264 plugin is a download), nothing loaded from the internet, and
 reconnecting its own streams, since nobody can press reload.
 
-Its smoke test checks the node boots to GDM, then runs `systemd-sysusers` and
-`systemd-tmpfiles` inside the test container as a boot would, and checks the results agree: the
-`kiosk` user exists, the session its AccountsService file names is installed, the script is in
+Its smoke test checks the node boots to GDM, then runs `systemd-sysusers` (with the password
+credential) and `systemd-tmpfiles` inside the test container as a boot would, and checks the
+results agree: the hash file is `0600`, the `kiosk` user exists with that hash, the session its
+AccountsService file names is installed, the script is in
 place and parses, `sshd` reads the drop-in that refuses `kiosk`, and the policy file parses.
 
 ### microshift: Kubernetes and the GPU
@@ -430,8 +434,8 @@ Every layer is published under these tags, all naming the same manifest:
 ### The ISO (`build-iso.yml`)
 
 1. Register, move storage onto `/scratch`, log in to GHCR and `registry.redhat.io`.
-2. Render `config.toml`, substituting `@JETSON_SSH_PUBKEY@`, `@JETSON_PASSWORD_HASH@` and
-   `@JETSON_KIOSK_PASSWORD_HASH@` in bash (not `sed`, which breaks on `&`, quotes and newlines). It
+2. Render `config.toml`, substituting `@JETSON_SSH_PUBKEY@` and
+   `@JETSON_PASSWORD_HASH@` in bash (not `sed`, which breaks on `&`, quotes and newlines). It
    first rejects an empty value, a line break, a password that is not a `$6$…` crypt hash, and
    a key that is not an OpenSSH public key. Each of those would otherwise produce an ISO nobody
    can log into.
@@ -454,7 +458,7 @@ if that kernel has the `sdhci-tegra` driver. If the installer finds no disk, che
 | `RH_REGISTRY_USER` / `RH_REGISTRY_PASSWORD` | Pull `registry.redhat.io/rhel9/bootc-image-builder` |
 | `JETSON_SSH_PUBKEY` | Public key for the `cloudlet` user (the key itself, not a path) |
 | `JETSON_PASSWORD_HASH` | `openssl passwd -6` output for `cloudlet`: the hash, not the password |
-| `JETSON_KIOSK_PASSWORD_HASH` | `openssl passwd -6` output for `kiosk`, typed on the screen's login: the hash, not the password |
+| `JETSON_KIOSK_PASSWORD_HASH` | `openssl passwd -6` output for `kiosk`, typed on the screen's login: the hash, not the password. Goes **into the image** (the kiosk layer); the build fails without it |
 
 The services layer's images (`quay.io/jetstack`, `oci.external-secrets.io`, `docker.io/kserve`,
 `quay.io/brancz`, `nvcr.io/nvidia`) are public and pulled anonymously.
@@ -596,7 +600,9 @@ injects on a registered host), from the repository root:
 sudo podman build -f base/Containerfile.base   -t localhost/jetson-orin-bootc-base:dev .
 sudo podman build -f base/Containerfile.podman -t localhost/jetson-orin-bootc-bound-images:dev \
   --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-base:dev .
+openssl passwd -6 > /tmp/kiosk-hash   # the kiosk login's password
 sudo podman build -f kiosk/Containerfile       -t localhost/jetson-orin-bootc-kiosk:dev \
+  --secret id=kiosk_password_hash,src=/tmp/kiosk-hash \
   --build-arg BASE_IMAGE=localhost/jetson-orin-bootc-bound-images:dev .
 sudo podman build -f microshift/Containerfile  -t localhost/jetson-orin-bootc-microshift:dev \
   --secret id=pullsecret,src=$HOME/pull-secret.json \
@@ -610,8 +616,7 @@ sudo podman run --rm -i localhost/jetson-orin-bootc-services:dev bash -s < servi
 
 # ISO
 sed -e "s|@JETSON_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
-    -e "s|@JETSON_PASSWORD_HASH@|$(openssl passwd -6)|" \
-    -e "s|@JETSON_KIOSK_PASSWORD_HASH@|$(openssl passwd -6)|" config.toml > /tmp/config.toml
+    -e "s|@JETSON_PASSWORD_HASH@|$(openssl passwd -6)|" config.toml > /tmp/config.toml
 mkdir -p output
 sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfined_t \
   -v /tmp/config.toml:/config.toml:ro -v ./output:/output \
@@ -673,6 +678,7 @@ The design record, with every decision and why, is `CLAUDE.md`.
 | `kiosk/gnome-kiosk-script` | waits for a monitor and the URL, runs Firefox, closes it on unplug, restarts it with back-off |
 | `kiosk/sshd-deny-kiosk.conf` | `sshd` refuses `kiosk`: its password is for the screen only |
 | `kiosk/sysusers.conf`, `kiosk/tmpfiles.conf` | the `kiosk` user, its home and session |
+| `kiosk/sysusers-credential.conf` | hands the image's password hash to `systemd-sysusers` |
 | `kiosk/jetson-kiosk.conf` | `KIOSK_URL` |
 | `kiosk/policies.json` | Firefox lockdown |
 | `kiosk/smoke-test.sh` | checks the layer is wired together |
