@@ -16,8 +16,8 @@ echo "== boots to GDM =="
 	|| fail "display-manager.service is not gdm.service"
 
 echo "== kiosk user, password and session =="
-# As a boot would, the credential included: an unexpanded escape, a missing
-# owner, or a password that never reaches /etc/shadow shows now.
+# As a boot would: an unexpanded escape, a missing owner or a lost password
+# shows now.
 user=kiosk
 dropin=/usr/lib/systemd/system/systemd-sysusers.service.d/50-jetson-kiosk.conf
 hash=$(sed -n "s/^LoadCredential=passwd.hashed-password.$user://p" "$dropin")

@@ -4,9 +4,7 @@
 ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-bound-images:latest
 FROM ${BASE_IMAGE}
 
-# The kiosk password's hash, for sysusers to set when it creates kiosk. In the
-# image, so every registry holding it holds the hash (the maintainer's call);
-# root-only on the node. Checked first, before minutes of dnf.
+# The kiosk password's hash, root-only, for sysusers. Checked before dnf.
 RUN --mount=type=secret,id=kiosk_password_hash \
     hash=$(cat /run/secrets/kiosk_password_hash 2>/dev/null || true) && \
     case $hash in \

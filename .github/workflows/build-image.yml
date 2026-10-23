@@ -139,8 +139,7 @@ jobs:
           jq -e '.auths | length > 0' /tmp/pull-secret.json > /dev/null \
             || { echo "::error::OPENSHIFT_PULL_SECRET is not a pull secret with an .auths object"; exit 1; }
 
-      # Unlike the pull secret, this one is meant for the image: the kiosk layer
-      # copies it in and checks it. The other layers never mount it.
+      # Unlike the pull secret, this one goes into the image; only kiosk/ mounts it.
       - name: Write kiosk password hash
         env:
           KIOSK_PASSWORD_HASH: ${{ secrets.JETSON_KIOSK_PASSWORD_HASH }}
