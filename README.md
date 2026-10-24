@@ -285,7 +285,7 @@ root's CRDs or webhook (`040` needs `030`) settles without anything sequencing i
 | Root | Service | What it does here | Namespace | Pods |
 |---|---|---|---|---|
 | `010-cert-manager` | cert-manager v1.21.2 | Issues KServe's webhook serving certificates (self-signed issuer, no ACME) | `cert-manager` | 3 |
-| `020-external-secrets` | External Secrets v0.19.2 | Syncs secrets from an external store. **No store configured yet** | `external-secrets` (moved off `default`) | 3 |
+| `020-external-secrets` | External Secrets v0.19.2 | Syncs secrets from an external store. **No store configured yet** | `external-secrets-operator` (moved off `default`) | 3 |
 | `030-kserve` | KServe v0.20.0, Standard (raw Deployment) mode | Turns an `InferenceService` into a model-serving Deployment + Service | `kserve` | 1 |
 | `040-triton-runtime` | NVIDIA Triton (`25.02-py3-igpu`) | The `ClusterServingRuntime` every InferenceService uses: TensorRT and ONNX models on the iGPU | cluster-scoped | one per InferenceService |
 
@@ -298,9 +298,10 @@ stops matching fails the build.
 - Upstream pins `runAsUser: 1000`, which MicroShift's `restricted-v2` security policy refuses
   (it assigns each pod a UID from the namespace's range). The patches remove it;
   `runAsNonRoot: true` stays.
-- Upstream installs into `default`. The root moves everything into `external-secrets`, including
-  three namespace names inside container arguments. Those are JSON patches, each guarded by a
-  `test` op, so an upstream reorder fails the build rather than rewriting the wrong argument.
+- Upstream installs into `default`. The root moves everything into `external-secrets-operator`,
+  including three namespace names inside container arguments. Those are JSON patches, each
+  guarded by a `test` op, so an upstream reorder fails the build rather than rewriting the wrong
+  argument.
 
 **KServe.**
 - Only `kserve-controller-manager` runs. It serves every webhook used here.
@@ -536,9 +537,9 @@ reboots ejecting the media.
    ```
 5. **Services**:
    ```
-   sudo -E oc get pods -n cert-manager      # 3 Running
-   sudo -E oc get pods -n external-secrets  # 3 Running
-   sudo -E oc get pods -n kserve            # 1 Running
+   sudo -E oc get pods -n cert-manager               # 3 Running
+   sudo -E oc get pods -n external-secrets-operator  # 3 Running
+   sudo -E oc get pods -n kserve                     # 1 Running
    sudo -E oc get clusterservingruntime triton-igpu
    journalctl -u microshift | grep -i kustomization   # a root still retrying shows here
    ```

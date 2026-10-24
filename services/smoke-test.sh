@@ -79,11 +79,11 @@ echo "== external secrets is out of the default namespace =="
 # Checked on the render, not the patches: which fields the namespace
 # transformer reaches depends on the kustomize version, and one it misses is a
 # silent no-op.
-jq -e 'any(.[]; .kind == "Namespace" and .metadata.name == "external-secrets")' \
+jq -e 'any(.[]; .kind == "Namespace" and .metadata.name == "external-secrets-operator")' \
 	"$eso" >/dev/null \
-	|| fail "the render creates no external-secrets namespace;" \
+	|| fail "the render creates no external-secrets-operator namespace;" \
 		"nothing else in the root can be applied without it"
-echo "   Namespace/external-secrets is in the render"
+echo "   Namespace/external-secrets-operator is in the render"
 # Every string value outside the CRDs, whose schemas are full of the word:
 # metadata, a subject, a webhook clientConfig, a service DNS name inside an
 # argument. Case-sensitive, so RuntimeDefault is not a false alarm.

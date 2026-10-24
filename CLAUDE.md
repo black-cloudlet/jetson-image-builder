@@ -315,8 +315,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     - Each Deployment's patch deletes the `runAsUser: 1000` upstream pins (restricted-v2 assigns
       a UID from the namespace range and refuses a pinned one) and adds resources.
       `runAsNonRoot: true` stays.
-    - Moved from `default` to namespace `external-secrets` via `namespace.yaml` and a
-      `namespace:` line. The transformer misses three namespaces inside container args
+    - Moved from `default` to namespace `external-secrets-operator` via `namespace.yaml` and
+      a `namespace:` line. The transformer misses three namespaces inside container args
       (`--service-namespace`, `--secret-namespace`, `--dns-name=…<ns>.svc`), so those are JSON
       patches, each guarded by a `test` op. Getting one wrong leaves the webhook without a
       valid certificate, and no ExternalSecret can be created.
@@ -450,11 +450,11 @@ hardware.
    removed by the prune.
 3. Device plugin: the DaemonSet runs and allocatable `nvidia.com/gpu` equals the replica
    count. Run that many GPU pods at once and watch for OOM.
-4. Services: pods Running in `cert-manager` (3), `external-secrets` (3) and `kserve` (1), with
-   no registry. A failing `runAsUser` patch shows in `oc describe rs`. Check resources survived
-   (`oc get deploy -A -o jsonpath`). `journalctl -u microshift | grep -i kustomization` shows a
-   root still retrying — watch `040`. Every services pod's `openshift.io/scc` annotation should
-   be `restricted-v2`.
+4. Services: pods Running in `cert-manager` (3), `external-secrets-operator` (3) and `kserve`
+   (1), with no registry. A failing `runAsUser` patch shows in `oc describe rs`. Check resources
+   survived (`oc get deploy -A -o jsonpath`). `journalctl -u microshift | grep -i kustomization`
+   shows a root still retrying — watch `040`. Every services pod's `openshift.io/scc` annotation
+   should be `restricted-v2`.
 5. Serve a model: first `pvc://` (model repository `oc cp`'d into a topolvm PVC), proving the
    Triton tag runs on r36.5 and an SCC-assigned UID can open the GPU (`id`, `ls -ln
    /dev/nvhost-ctrl-gpu /dev/nvmap`; if `root:video 0660`, add `supplementalGroups` on the
