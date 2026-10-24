@@ -6,9 +6,10 @@
 #
 # Images land in /usr/lib/containers-image-cache/<sha of reference> and
 # mapping.txt records reference -> sha. copy_embedded_images.sh replays that
-# into containers-storage at boot. A separate cache directory is used rather
-# than /usr/lib/containers/storage because an image upgrade overwrites an
-# additional container store (RHEL-75827).
+# into containers-storage at boot. A plain cache directory is used rather than
+# an additional container store at /usr/lib/containers/storage: images pulled
+# into the main store would reuse its layers, and an OS upgrade that drops one
+# leaves them pointing at nothing (RHEL-75827).
 set -euxo pipefail
 
 CACHE_DIR=/usr/lib/containers-image-cache

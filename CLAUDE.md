@@ -298,10 +298,12 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   - The smoke test checks how the render is **wired** (one container, `CONFIG_FILE` into a
     mounted ConfigMap with a replica count, `/var/lib/kubelet/device-plugins` mounted), never
     upstream field names: those change between tags and broke an earlier version of the check.
-  - No `microshift-gitops` (removed). Images go into the main store, not an additional store,
-    which an upgrade overwrites (RHEL-75827). **No `dnf upgrade`**: it could pull a kernel the
-    Tegra kmod was not built for. `--enablerepo`, not `dnf config-manager`. Units are
-    `COPY <<'EOF'` heredocs; RHEL 9's podman parses them.
+  - No `microshift-gitops` (removed). Images go into the main store, not an additional store:
+    images pulled later would reuse its layers, and an upgrade that drops one breaks them
+    (RHEL-75827, still open 2026-10; the `dir:` copy with `mapping.txt` is the workaround
+    written on it). **No `dnf upgrade`**: it could pull a kernel the Tegra kmod was not built
+    for. `--enablerepo`, not `dnf config-manager`. Units are `COPY <<'EOF'` heredocs; RHEL 9's
+    podman parses them.
 - `microshift/manifest-images.sh` — prints every image the given manifest roots name, rendered
   with `oc kustomize` (release-info lists only the control plane, and `images:` transformers
   defeat a grep). The build embeds what it prints; `services/` uses it too.
