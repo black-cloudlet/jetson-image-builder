@@ -143,6 +143,16 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   test checks the vendor image: `skopeo`, `podman`, and `lvm2` (root is on an LV and LVMS
   needs `vgs`; nothing here installs it).
 - `base/Containerfile.podman` — `FROM` that via `ARG BASE_IMAGE`:
+  - Field tools, because a node has no repo and a read-only `/usr`: `tcpdump`, `mtr`,
+    `nmap-ncat`, `strace`, `sysstat`, `tmux`, `usbutils`, plus `bind-utils`, `ethtool`,
+    `lsof`, `NetworkManager-tui`, `psmisc` and `sos`, which the vendor image already has
+    (listed so a base bump cannot drop them). No weak deps. Resolved against the vendor rpmdb
+    (2026-10-24, EL9 builds, some sizes x86_64): ~12 MiB installed, the largest `strace`
+    (3.2 MB) and `libibverbs` (1.8 MB, pulled by `libpcap`). `sysstat` keeps RHEL's preset
+    (`enable sysstat.service`), so `sar` samples to `/var/log/sa` every 10 min for 28 days:
+    the eMMC's history after a mission, and a little more writing to it. No `htop`/`iftop`
+    (EPEL), `tshark` (capture here, read on the laptop), `nvme-cli` (with the NVMe). No
+    smoke-test line: `dnf` already fails the build on a missing package.
   - `embed_image.sh`, `copy_embedded_images.sh` and `copy-embedded-images.service`, `COPY`d
     from `base/physically-bound-images/`.
   - `jetson-stats` (`jtop`, pinned `JTOP_VER`) via `pip3 install --prefix=/usr` (`/usr/local`
