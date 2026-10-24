@@ -1,19 +1,7 @@
-# Layer 2, shared: embedding machinery, jtop, Edge Manager agent, field tools. The
-# images it replays are embedded by the layers above — never here, where every
-# variant pays.
+# Layer 2, shared: embedding machinery, jtop, Edge Manager agent. The images it
+# replays are embedded by the layers above — never here, where every variant pays.
 ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-base:latest
 FROM ${BASE_IMAGE}
-
-# Field diagnostics: a node has no repo to install from and /usr is read-only, so
-# what a maintainer needs on site must already be here. Listed even where the
-# vendor image has it (bind-utils, ethtool, lsof, NetworkManager-tui, psmisc, sos)
-# so a base bump that drops one puts it back; dnf leaves an installed one as is.
-# sysstat keeps RHEL's preset: sar samples to /var/log/sa every 10 min, 28 days,
-# which is the eMMC history a mission leaves behind. No weak deps, as below.
-RUN dnf install -y --setopt=install_weak_deps=False \
-        bind-utils ethtool lsof mtr NetworkManager-tui nmap-ncat psmisc sos \
-        strace sysstat tcpdump tmux usbutils && \
-    dnf clean all
 
 # --prefix=/usr: /usr/local is machine state on bootc and would not survive.
 ARG JTOP_VER=7.2.1

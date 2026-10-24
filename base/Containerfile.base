@@ -1,6 +1,18 @@
-# Layer 1, shared: the vendor image republished under a name we control.
-# Pinned, never a floating tag — the Tegra kmod is tied to this kernel build.
+# Layer 1, shared: the vendor image republished under a name we control, plus
+# field tools. Pinned, never a floating tag — the Tegra kmod is tied to this
+# kernel build.
 ARG BASE=quay.io/redhat-user-workloads/jetpack-for-rhel-tenant/rhel-98-bootc:6.2.2_5.14.0-687.42.1_090326003719
 FROM ${BASE}
+
+# Field diagnostics: a node has no repo to install from and /usr is read-only, so
+# what a maintainer needs on site must already be here. Listed even where the
+# vendor image has it (bind-utils, ethtool, lsof, NetworkManager-tui, psmisc, sos)
+# so a base bump that drops one puts it back; dnf leaves an installed one as is.
+# sysstat keeps RHEL's preset: sar samples to /var/log/sa every 10 min, 28 days,
+# which is the eMMC history a mission leaves behind. No weak deps: only what is named.
+RUN dnf install -y --setopt=install_weak_deps=False \
+        bind-utils ethtool lsof mtr NetworkManager-tui nmap-ncat psmisc sos \
+        strace sysstat tcpdump tmux usbutils && \
+    dnf clean all
 
 RUN bootc container lint

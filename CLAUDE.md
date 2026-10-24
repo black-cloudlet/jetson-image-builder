@@ -102,7 +102,8 @@ only. KServe was removed once before (`bba9d10`, reason unrecorded).
    `metacopy=on`, which defeats it too, so the step strips it and fails unless `podman info`
    reports `Native Overlay Diff:true`.
 7. **Five layers for microshift, one directory per Kubernetes variant.**
-   - `base/Containerfile.base` republishes the pinned vendor image under our name.
+   - `base/Containerfile.base` republishes the pinned vendor image under our name, plus the
+     field tools (`tcpdump` and the like): the one layer below everything, and changed rarely.
    - `base/Containerfile.podman` adds the physically-bound-images machinery and `jtop`.
      Published as `jetson-orin-bootc-bound-images` from CI job `bound_images` (an underscore:
      `needs.bound-images` parses as a subtraction and resolves to nothing).
@@ -139,10 +140,9 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
 
 ### Image + ISO pipeline
 
-- `base/Containerfile.base` — the pinned vendor image plus `bootc container lint`. Its smoke
-  test checks the vendor image: `skopeo`, `podman`, and `lvm2` (root is on an LV and LVMS
-  needs `vgs`; nothing here installs it).
-- `base/Containerfile.podman` — `FROM` that via `ARG BASE_IMAGE`:
+- `base/Containerfile.base` — the pinned vendor image, field tools and `bootc container lint`.
+  Its smoke test checks the vendor image: `skopeo`, `podman`, and `lvm2` (root is on an LV and
+  LVMS needs `vgs`; nothing here installs it).
   - Field tools, because a node has no repo and a read-only `/usr`: `tcpdump`, `mtr`,
     `nmap-ncat`, `strace`, `sysstat`, `tmux`, `usbutils`, plus `bind-utils`, `ethtool`,
     `lsof`, `NetworkManager-tui`, `psmisc` and `sos`, which the vendor image already has
@@ -153,6 +153,7 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     the eMMC's history after a mission, and a little more writing to it. No `htop`/`iftop`
     (EPEL), `tshark` (capture here, read on the laptop), `nvme-cli` (with the NVMe). No
     smoke-test line: `dnf` already fails the build on a missing package.
+- `base/Containerfile.podman` — `FROM` that via `ARG BASE_IMAGE`:
   - `embed_image.sh`, `copy_embedded_images.sh` and `copy-embedded-images.service`, `COPY`d
     from `base/physically-bound-images/`.
   - `jetson-stats` (`jtop`, pinned `JTOP_VER`) via `pip3 install --prefix=/usr` (`/usr/local`
