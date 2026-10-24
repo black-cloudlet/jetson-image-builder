@@ -32,10 +32,12 @@ id "$user" || fail "sysusers did not create $user"
 [[ $(getent shadow "$user" | cut -d: -f2) == "$(cat "$hash")" ]] \
 	|| fail "sysusers created $user without the password from $hash"
 
+# The login screen offers every session file; anything but kiosk's is a desktop.
 session=$(sed -n 's/^Session=//p' "/var/lib/AccountsService/users/$user")
-[[ -f /usr/share/wayland-sessions/$session.desktop ]] || {
-	echo "the AccountsService file names session '$session', which is not installed:"
-	ls -la /usr/share/wayland-sessions
+offered=$({ find /usr/share/wayland-sessions /usr/share/xsessions -name '*.desktop' -printf '%f\n' 2>/dev/null || true; } | LC_ALL=C sort)
+[[ $offered == "$session.desktop" ]] || {
+	echo "the login screen offers [${offered//$'\n'/ }], not only $session.desktop (the AccountsService session):"
+	ls -la /usr/share/wayland-sessions /usr/share/xsessions 2>&1 || true
 	exit 1
 }
 
