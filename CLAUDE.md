@@ -216,7 +216,9 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   image does not deploy. The build deletes every other session file: GDM pulls in GNOME Shell's
   (`gnome.desktop`, `gnome-wayland.desktop`), which the login screen's session menu would offer
   as a full desktop. RHEL 9's kiosk session is `gnome-kiosk-script`, not the newer
-  `gnome-kiosk-script-wayland`: the first dispatch (run 40) failed on exactly that. Once logged in, the session stays until reboot: GNOME Kiosk has no
+  `gnome-kiosk-script-wayland`: the first dispatch (run 40) failed on exactly that. The package
+  ships it in both `wayland-sessions` and `xsessions` under that one name, which GDM treats as
+  one session (Wayland preferred); the smoke test compares names, not files (run 41). Once logged in, the session stays until reboot: GNOME Kiosk has no
   screen lock, and idle lock was offered and declined (custom code). The script sources
   `/etc/jetson-kiosk.conf` and loops: wait
   for any DRM connector `connected` (sysfs, every 2 s; no monitor, no Firefox decoding video),
