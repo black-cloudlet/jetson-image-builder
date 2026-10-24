@@ -461,7 +461,8 @@ hardware.
 6. Kiosk, with a monitor on DP: `lsmod | grep -E 'nvidia_drm|nvidia_modeset'` and
    `/dev/dri/card*`; `/run/gdm/custom.conf` without `WaylandEnable=false` (GDM's udev rules
    write it when they refuse Wayland on a driver, and with no X server installed nothing would
-   start: that is the case for `claude/kiosk-xorg-cpu`); GDM's login screen lists only `kiosk`,
+   start: that is the case for `claude/kiosk-xorg-cpu`); the login screen still appears with GNOME
+   Shell's session files deleted, and its gear lists only the kiosk session; it lists only `kiosk`,
    the image's password logs in, `ssh kiosk@` is refused, Ctrl-Alt-F3 and the serial console
    refuse `kiosk` and take `cloudlet`, `nmcli con mod` and `systemctl reboot` as `kiosk` are
    denied, `journalctl -b | grep -i polkit` shows nothing from the kiosk session breaking,
