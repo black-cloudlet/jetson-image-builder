@@ -33,8 +33,9 @@ id "$user" || fail "sysusers did not create $user"
 	|| fail "sysusers created $user without the password from $hash"
 
 # The login screen offers every session file; anything but kiosk's is a desktop.
+# One name is one session: RHEL ships the kiosk one for Wayland and for X11.
 session=$(sed -n 's/^Session=//p' "/var/lib/AccountsService/users/$user")
-offered=$({ find /usr/share/wayland-sessions /usr/share/xsessions -name '*.desktop' -printf '%f\n' 2>/dev/null || true; } | LC_ALL=C sort)
+offered=$({ find /usr/share/wayland-sessions /usr/share/xsessions -name '*.desktop' -printf '%f\n' 2>/dev/null || true; } | LC_ALL=C sort -u)
 [[ $offered == "$session.desktop" ]] || {
 	echo "the login screen offers [${offered//$'\n'/ }], not only $session.desktop (the AccountsService session):"
 	ls -la /usr/share/wayland-sessions /usr/share/xsessions 2>&1 || true
