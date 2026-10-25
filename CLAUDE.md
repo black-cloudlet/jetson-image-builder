@@ -144,9 +144,9 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   Its smoke test checks the vendor image: `skopeo`, `podman`, and `lvm2` (root is on an LV and
   LVMS needs `vgs`; nothing here installs it).
   - Field tools, because a node has no repo and a read-only `/usr`: `tcpdump`, `mtr`,
-    `nmap-ncat`, `strace`, `sysstat`, `tmux`, `usbutils`, plus `bind-utils`, `ethtool`,
-    `lsof`, `NetworkManager-tui`, `psmisc` and `sos`, which the vendor image already has
-    (listed so a base bump cannot drop them). No weak deps. Resolved against the vendor rpmdb
+    `nmap-ncat`, `pciutils`, `strace`, `sysstat`, `tmux`, `usbutils`, plus `bind-utils`,
+    `ethtool`, `lsof`, `NetworkManager-tui`, `psmisc` and `sos`, which the vendor image already
+    has (listed so a base bump cannot drop them). No weak deps. Resolved against the vendor rpmdb
     (2026-10-24, EL9 builds, some sizes x86_64): ~12 MiB installed, the largest `strace`
     (3.2 MB) and `libibverbs` (1.8 MB, pulled by `libpcap`). `sysstat` keeps RHEL's preset
     (`enable sysstat.service`), so `sar` samples to `/var/log/sa` every 10 min for 28 days:
