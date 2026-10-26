@@ -102,7 +102,8 @@ only. KServe was removed once before (`bba9d10`, reason unrecorded).
    `metacopy=on`, which defeats it too, so the step strips it and fails unless `podman info`
    reports `Native Overlay Diff:true`.
 7. **Five layers for microshift, one directory per Kubernetes variant.**
-   - `base/Containerfile.base` republishes the pinned vendor image under our name.
+   - `base/Containerfile.base` republishes the pinned vendor image under our name, plus field
+     tools (`tcpdump` and the like).
    - `base/Containerfile.podman` adds the physically-bound-images machinery and `jtop`.
      Published as `jetson-orin-bootc-bound-images` from CI job `bound_images` (an underscore:
      `needs.bound-images` parses as a subtraction and resolves to nothing).
@@ -139,9 +140,14 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
 
 ### Image + ISO pipeline
 
-- `base/Containerfile.base` — the pinned vendor image plus `bootc container lint`. Its smoke
-  test checks the vendor image: `skopeo`, `podman`, and `lvm2` (root is on an LV and LVMS
-  needs `vgs`; nothing here installs it).
+- `base/Containerfile.base` — the pinned vendor image, field tools and `bootc container lint`.
+  Its smoke test checks the vendor image: `skopeo`, `podman`, and `lvm2` (root is on an LV and
+  LVMS needs `vgs`; nothing here installs it).
+  - Field tools (a node has no repo and a read-only `/usr`): `tcpdump`, `mtr`, `nmap-ncat`,
+    `pciutils`, `strace`, `sysstat`, `tmux`, `usbutils`; `bind-utils`, `ethtool`, `lsof`,
+    `NetworkManager-tui`, `psmisc` and `sos` come with the vendor image, listed so a bump cannot
+    drop them. ~12 MiB. `sar` logs to `/var/log/sa` every 10 min for 28 days (RHEL's preset).
+    Not added: `htop`/`iftop` (EPEL), `tshark`, `nvme-cli` (with the NVMe).
 - `base/Containerfile.podman` — `FROM` that via `ARG BASE_IMAGE`:
   - `embed_image.sh`, `copy_embedded_images.sh` and `copy-embedded-images.service`, `COPY`d
     from `base/physically-bound-images/`.
