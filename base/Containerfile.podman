@@ -26,7 +26,7 @@ COPY --chmod=0644 base/physically-bound-images/copy-embedded-images.service \
       /usr/lib/systemd/system/copy-embedded-images.service
 RUN systemctl enable copy-embedded-images.service
 
-# Edge Manager agent from ACM; ACM_VER matches the hub. No weak deps: keeps greenboot out.
+# Edge Manager agent from ACM; ACM_VER matches the hub. No weak deps.
 ARG ACM_VER=2.15
 RUN dnf install -y --setopt=install_weak_deps=False \
         --enablerepo="rhacm-${ACM_VER}-for-rhel-9-$(uname -m)-rpms" \
@@ -39,6 +39,16 @@ COPY <<'EOF' /usr/lib/systemd/system/flightctl-agent.service.d/10-enrollment.con
 [Unit]
 ConditionPathExists=/etc/flightctl/config.yaml
 EOF
+
+# The package's greenboot check requires the agent active within 150 s, which
+# an idle agent never is: greenboot (MicroShift brings it) rebooted every new
+# deployment until it rolled back, seen on hardware. Unenrolled, it passes.
+RUN check=$(rpm -ql flightctl-agent | grep /greenboot/check/); \
+    if [ "$(printf '%s' "$check" | grep -c .)" -ne 1 ]; then \
+        echo "expected one greenboot check in flightctl-agent, found:"; \
+        rpm -ql flightctl-agent | grep greenboot; exit 1; \
+    fi; \
+    sed -i '1a [ -f /etc/flightctl/config.yaml ] || exit 0' "$check"
 
 # Once enrolled, Edge Manager owns OS updates, not bootc's daily upgrade.
 COPY <<'EOF' /usr/lib/systemd/system/bootc-fetch-apply-updates.service.d/10-flightctl.conf
