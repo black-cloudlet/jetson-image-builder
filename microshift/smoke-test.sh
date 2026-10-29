@@ -80,9 +80,9 @@ echo "== gpu time slicing =="
 #
 # `oc patch --local` with an empty patch never contacts a server; it parses the
 # render and prints it back as JSON, which jq can then query.
-r=$(oc kustomize /etc/microshift/manifests |
+r=$(oc kustomize /usr/lib/microshift/manifests |
 	oc patch --local -f - --type=merge -p '{}' -o json | jq -s .) \
-	|| fail "does not render: /etc/microshift/manifests"
+	|| fail "does not render: /usr/lib/microshift/manifests"
 
 # Prefixed to the jq programs below: the device plugin's pod spec.
 P='def pod: .[] | select(.kind == "DaemonSet") | .spec.template.spec;'

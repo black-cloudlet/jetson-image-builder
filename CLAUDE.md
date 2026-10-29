@@ -296,8 +296,9 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   drop-in ordering the copy first, and the NVIDIA device plugin:
   - `nvidia-ctk runtime configure --runtime=crio --set-as-default` →
     `/etc/crio/crio.conf.d/99-nvidia.toml`.
-  - `microshift/manifests/`: kustomization, a ConfigMap with **GPU time slicing** (4 replicas
-    of `nvidia.com/gpu`), and a patch mounting it via `CONFIG_FILE`; only
+  - `microshift/manifests/` → `/usr/lib/microshift/manifests`: kustomization, a ConfigMap with
+    **GPU time slicing** (4 replicas of `nvidia.com/gpu`), and a patch mounting it via
+    `CONFIG_FILE`; only
     `nvidia-device-plugin.yml` is curl'd. One iGPU means one GPU pod without slicing. No memory
     isolation between replicas, so the count is a claim about the SOM's RAM; 1 disables it.
     `renameByDefault` stays off, so the resource is plain `nvidia.com/gpu`.
@@ -318,10 +319,21 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
 - `microshift/manifest-images.sh` — prints every image the given manifest roots name, rendered
   with `oc kustomize` (release-info lists only the control plane, and `images:` transformers
   defeat a grep). The build embeds what it prints; `services/` uses it too.
-- `services/Containerfile` — four numbered roots under `/etc/microshift/manifests.d/`, plus
+- `services/Containerfile` — four numbered roots under `/usr/lib/microshift/manifests.d/`, plus
   every image they name. MicroShift **sorts** the roots and applies each with the equivalent of
   `kubectl apply -k`, retrying a failing one **every 10 s for 10 minutes**
   (`pkg/kustomize/kustomize.go`) — that is the ordering and what covers a CRD not yet served.
+  **Manifests live in `/usr/lib`, never `/etc`** (MicroShift's own split: `/etc` for what a
+  management system puts on a node, `/usr/lib` for what the image embeds). `/etc` is node state
+  merged on upgrade, so a manifest once edited on a node keeps that version past every later
+  image, and can name an image no longer embedded. Order is unchanged: MicroShift reads
+  `/usr/lib/…/manifests`, `/usr/lib/…/manifests.d/*`, then the `/etc` pair. The `/etc` pair
+  stays the place for a deliberate per-node override. Red Hat's optional RPMs (`microshift-olm`
+  and the like) put `00N-microshift-*` roots in the same `manifests.d`; none is installed. One
+  would be embedded by `services/` and held to its smoke test's rules, which it likely fails
+  (resource ratios). MicroShift's **config** has no `/usr` path (`/etc/microshift/config.yaml`
+  and `config.d` only), so `config.d/` stays in `/etc`; `ostree admin config-diff` shows a node
+  that drifted.
   - `010-cert-manager/` — upstream static manifest (`CERT_MANAGER_VER`, v1.21.2), patched for
     resources only. KServe's webhook certificate comes from it.
   - `020-external-secrets/` — upstream manifest (`EXTERNAL_SECRETS_VER`, v0.19.2):

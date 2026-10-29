@@ -25,7 +25,7 @@ echo "== renders =="
 # empty patch never contacts a server; it parses the render and prints it back
 # as JSON, which jq can then query.
 render=$(mktemp -d)
-roots=(/etc/microshift/manifests.d/*/)
+roots=(/usr/lib/microshift/manifests.d/*/)
 for root in "${roots[@]}"; do
 	name=$(basename "$root")
 	oc kustomize "$root" | oc patch --local -f - --type=merge -p '{}' -o json |
