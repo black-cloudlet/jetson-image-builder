@@ -74,10 +74,6 @@ RUN nvidia-ctk runtime configure --runtime=crio --set-as-default \
 COPY microshift/crio.conf.d/20-pinned-images.conf \
       /etc/crio/crio.conf.d/20-pinned-images.conf
 
-# In /usr/lib, not /etc: /etc is the node's own and upgrades merge into it, so a
-# file once edited on a node would keep that version past every later image and
-# could name an image no longer embedded. /usr is exactly the image. MicroShift
-# applies /usr/lib/microshift/manifests before manifests.d/*, as it did in /etc.
 RUN mkdir -p /usr/lib/microshift/manifests && \
     curl -fsSL -o /usr/lib/microshift/manifests/nvidia-device-plugin.yml \
       "https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/${NVIDIA_DEVICE_PLUGIN_VER}/deployments/static/nvidia-device-plugin.yml"
