@@ -50,4 +50,13 @@ for unit in flightctl-agent.service bootc-fetch-apply-updates.service; do
 	fi
 done
 
+# Unenrolled, the agent is idle by design, and a failing required greenboot
+# check rolls every upgrade back. Without the guard the check waits 150 s.
+check=$(rpm -ql flightctl-agent | grep /greenboot/check/)
+if ! timeout 10 bash "$check" >/dev/null 2>&1; then
+	echo "$check fails on an unenrolled node; its head:"
+	head -5 "$check" | sed 's/^/   /'
+	exit 1
+fi
+
 echo "all checks passed"

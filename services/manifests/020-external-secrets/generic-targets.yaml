@@ -1,5 +1,5 @@
-# The ConfigMap write the generic-targets flag needs; upstream's role only reads.
-# Cluster-wide, because 025 writes into every namespace.
+# The ConfigMap write that flag needs. Subject `default`, as upstream's: the
+# `namespace:` line moves it.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -20,4 +20,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: external-secrets
-    namespace: external-secrets
+    namespace: default

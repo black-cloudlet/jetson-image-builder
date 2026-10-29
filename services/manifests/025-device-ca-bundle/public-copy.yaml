@@ -1,6 +1,5 @@
-# Hop 1: device-ca to device-ca-public, tls.crt only, read as an account whose
-# Role names that one Secret. tls.crt, not ca.crt: if an organisation root ever
-# signs this CA, ca.crt becomes that root.
+# Hop 1: tls.crt alone into device-ca-public. Not ca.crt, which would become an
+# organisation root if one ever signed this CA.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -50,7 +49,7 @@ spec:
         serviceAccount:
           name: device-ca-exporter
 ---
-# `property` keeps tls.key out: without it every key comes back.
+# Without `property`, every key comes back, tls.key included.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:

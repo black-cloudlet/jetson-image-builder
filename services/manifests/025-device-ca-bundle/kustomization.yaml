@@ -1,13 +1,7 @@
-# ConfigMap device-ca.crt (key ca.crt) in every namespace: 015's certificate,
-# never its key.
-#
-# Two hops, because ESO reads a Secret whole and a ClusterSecretStore can be
-# used from any namespace: one able to read device-ca would hand out tls.key.
-# public-copy.yaml copies tls.crt through a store only cert-manager can use;
-# distribute.yaml publishes that copy everywhere.
-#
-# After 020, which installs ESO's kinds: MicroShift applies the roots one at a
-# time and gives up on one after ten minutes, so before 020 this never applies.
+# ConfigMap device-ca.crt in every namespace: the CA certificate, never its key.
+# Two hops, since ESO reads a Secret whole and a ClusterSecretStore serves any
+# namespace: only a store local to cert-manager touches device-ca.
+# After 020: MicroShift gives up on a root after ten minutes and never returns.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

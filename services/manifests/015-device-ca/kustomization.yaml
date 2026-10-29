@@ -1,7 +1,5 @@
-# The node's own CA. cert-manager generates the key on the node, so every node
-# has a different one and none is in the image; it lives as long as
-# /var/lib/microshift. Right after 010: it needs only cert-manager's webhook,
-# which 030 waits on anyway.
+# The node's own CA, generated on the node: never in the image, different on
+# every node. Beside 010: it needs only cert-manager's webhook.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

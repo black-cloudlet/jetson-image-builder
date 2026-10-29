@@ -1,5 +1,4 @@
-# Signs only the CA itself. Namespaced, so no other namespace can mint a
-# self-signed CA with it.
+# Namespaced: it signs the CA and nothing else.
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:

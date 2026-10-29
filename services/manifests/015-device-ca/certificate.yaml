@@ -1,7 +1,5 @@
-# In cert-manager because a ClusterIssuer reads its Secret from the controller's
-# --cluster-resource-namespace. The Secret holds tls.key; 025 copies tls.crt only.
-# rotationPolicy: Never keeps the key on renewal, so existing leaves and stale
-# bundles still verify; cert-manager's default became Always in v1.18.
+# In cert-manager, where a ClusterIssuer reads its Secret. rotationPolicy Never:
+# renewal keeps the key, so existing leaves still verify.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:

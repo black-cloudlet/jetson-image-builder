@@ -1,5 +1,4 @@
-# Lets an ExternalSecret write a ConfigMap (025); generic-targets.yaml grants the
-# write. Appended, so it survives upstream adding arguments.
+# ConfigMap targets, for 025. Appended, so it survives new upstream arguments.
 - op: add
   path: /spec/template/spec/containers/0/args/-
   value: --unsafe-allow-generic-targets

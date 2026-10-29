@@ -25,7 +25,7 @@ echo "== renders =="
 # empty patch never contacts a server; it parses the render and prints it back
 # as JSON, which jq can then query.
 render=$(mktemp -d)
-roots=(/etc/microshift/manifests.d/*/)
+roots=(/usr/lib/microshift/manifests.d/*/)
 for root in "${roots[@]}"; do
 	name=$(basename "$root")
 	oc kustomize "$root" | oc patch --local -f - --type=merge -p '{}' -o json |
@@ -79,11 +79,11 @@ echo "== external secrets is out of the default namespace =="
 # Checked on the render, not the patches: which fields the namespace
 # transformer reaches depends on the kustomize version, and one it misses is a
 # silent no-op.
-jq -e 'any(.[]; .kind == "Namespace" and .metadata.name == "external-secrets")' \
+jq -e 'any(.[]; .kind == "Namespace" and .metadata.name == "external-secrets-operator")' \
 	"$eso" >/dev/null \
-	|| fail "the render creates no external-secrets namespace;" \
+	|| fail "the render creates no external-secrets-operator namespace;" \
 		"nothing else in the root can be applied without it"
-echo "   Namespace/external-secrets is in the render"
+echo "   Namespace/external-secrets-operator is in the render"
 # Every string value outside the CRDs, whose schemas are full of the word:
 # metadata, a subject, a webhook clientConfig, a service DNS name inside an
 # argument. Case-sensitive, so RuntimeDefault is not a false alarm.
@@ -158,11 +158,10 @@ csc=$(jq -r '.[] | select(.kind == "ClusterStorageContainer") | .metadata.name' 
 echo "   no ClusterStorageContainer"
 
 echo "== device CA =="
-# 015 and 025 are ours, so the risk is two files disagreeing on a name, which
-# shows only on hardware.
+# 015 and 025 are ours: check that the names they share agree.
 ca=$render/015-device-ca.json
 bundle=$render/025-device-ca-bundle.json
-# A ClusterIssuer reads Secrets from the controller's cluster resource namespace.
+# Where the controller reads ClusterIssuer Secrets.
 crn=$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "cert-manager")
 	| .metadata.namespace as $ns | .spec.template.spec.containers[0].args[]
 	| select(startswith("--cluster-resource-namespace="))
@@ -190,9 +189,8 @@ read -r ca_ns ca_secret < <(jq -r '.[] | select(.kind == "Certificate" and .spec
 	| "\(.metadata.namespace) \(.spec.secretName)"' "$ca")
 echo "   $ca_ns/$ca_secret: self-signed, read by a ClusterIssuer from $crn"
 
-# That Secret holds the key: only a namespaced store in its namespace may read
-# it, one certificate field at a time, and no account a ClusterSecretStore uses
-# may read it at all. Only bindings in this root are seen.
+# The key is in that Secret: no cluster store may reach it, and a namespaced one
+# only one certificate field at a time. Bindings outside this root are unseen.
 out=$(jq -r --arg ns "$ca_ns" --arg s "$ca_secret" '
 	. as $all
 	| def secret_rules($sa): $all[]
@@ -221,8 +219,7 @@ out=$(jq -r --arg ns "$ca_ns" --arg s "$ca_secret" '
 [[ -z $out ]] || fail "$out"
 echo "   $ca_secret: read by name, one certificate field, through a namespaced store only"
 
-# Its keys must be granted by name and written by some ExternalSecret, or the
-# copy in every namespace fails.
+# Every key it reads must be granted by name and written by an ExternalSecret.
 out=$(jq -r '. as $all
 	| .[] | select(.kind == "ClusterExternalSecret") | "\(.kind)/\(.metadata.name)" as $o
 	| .spec.externalSecretSpec as $spec
@@ -247,7 +244,7 @@ out=$(jq -r '. as $all
 [[ -z $out ]] || fail "$out"
 echo "   ClusterExternalSecret reads only the public copy, granted by name"
 
-# A ConfigMap target needs both the controller flag and the write.
+# A ConfigMap target needs the controller flag and the write.
 if jq -e 'any(.[]; (.spec.target.manifest // .spec.externalSecretSpec.target.manifest) != null)' \
 	"$bundle" >/dev/null; then
 	jq -e '.[] | select(.kind == "Deployment" and .metadata.name == "external-secrets")
@@ -255,9 +252,13 @@ if jq -e 'any(.[]; (.spec.target.manifest // .spec.externalSecretSpec.target.man
 		"$eso" >/dev/null \
 		|| fail "025 writes a ConfigMap, but the external-secrets controller is not" \
 			"started with --unsafe-allow-generic-targets"
-	jq -e '. as $all | .[] | select(.kind == "ClusterRoleBinding")
-		| select(any(.subjects[]; .kind == "ServiceAccount" and .name == "external-secrets"
-			and .namespace == "external-secrets"))
+	jq -e '. as $all
+		| ($all[] | select(.kind == "Deployment" and .metadata.name == "external-secrets")
+			| .metadata.namespace as $ns | .spec.template.spec.serviceAccountName
+			| {name: ., namespace: $ns}) as $sa
+		| .[] | select(.kind == "ClusterRoleBinding")
+		| select(any(.subjects[]; .kind == "ServiceAccount"
+			and .name == $sa.name and .namespace == $sa.namespace))
 		| .roleRef.name as $r | $all[] | select(.kind == "ClusterRole" and .metadata.name == $r)
 		| .rules[] | select(any(.resources[]; . == "configmaps"))
 		| select(.verbs | index("create") and index("update") and index("delete"))' \
