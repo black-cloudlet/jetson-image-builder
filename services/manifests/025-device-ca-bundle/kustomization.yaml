@@ -1,0 +1,9 @@
+# ConfigMap device-ca.crt in every namespace: the CA certificate, never its key.
+# Two hops, since ESO reads a Secret whole and a ClusterSecretStore serves any
+# namespace: only a store local to cert-manager touches device-ca.
+# After 020: MicroShift gives up on a root after ten minutes and never returns.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - public-copy.yaml
+  - distribute.yaml
