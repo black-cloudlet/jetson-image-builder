@@ -5,23 +5,24 @@ FROM ${BASE_IMAGE}
 
 # Numbered: MicroShift sorts manifests.d and applies each root in turn, and
 # retries a failing one for ten minutes — which covers a CRD not yet served.
-COPY services/manifests/ /etc/microshift/manifests.d/
+# /usr/lib, not /etc, for the reason given with the device plugin's manifests.
+COPY services/manifests/ /usr/lib/microshift/manifests.d/
 
 # Upstream installs, curl'd here and patched from the roots above, never forked.
 # Pinned, never a channel: the version ARGs are the only pin on the images too.
 ARG CERT_MANAGER_VER=v1.21.2
 RUN curl -fsSL \
-      -o /etc/microshift/manifests.d/010-cert-manager/cert-manager.yaml \
+      -o /usr/lib/microshift/manifests.d/010-cert-manager/cert-manager.yaml \
       "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VER}/cert-manager.yaml"
 
 ARG EXTERNAL_SECRETS_VER=v0.19.2
 RUN curl -fsSL \
-      -o /etc/microshift/manifests.d/020-external-secrets/external-secrets.yaml \
+      -o /usr/lib/microshift/manifests.d/020-external-secrets/external-secrets.yaml \
       "https://github.com/external-secrets/external-secrets/releases/download/${EXTERNAL_SECRETS_VER}/external-secrets.yaml"
 
 # Not kserve-cluster-resources.yaml: its fourteen runtimes' images would all be embedded.
 ARG KSERVE_VER=v0.20.0
-RUN curl -fsSL -o /etc/microshift/manifests.d/030-kserve/kserve.yaml \
+RUN curl -fsSL -o /usr/lib/microshift/manifests.d/030-kserve/kserve.yaml \
       "https://github.com/kserve/kserve/releases/download/${KSERVE_VER}/kserve.yaml"
 
 # Embed what the manifests name, rendered, not a list kept beside them.
@@ -30,7 +31,7 @@ RUN curl -fsSL -o /etc/microshift/manifests.d/030-kserve/kserve.yaml \
 ARG SERVICE_IMAGES=""
 RUN --mount=type=secret,id=pullsecret,dst=/run/secrets/pull-secret.json \
     images="$(/opt/microshift/manifest-images.sh \
-        /etc/microshift/manifests.d/*/)" && \
+        /usr/lib/microshift/manifests.d/*/)" && \
     for img in ${images} ${SERVICE_IMAGES} ; do \
         /opt/physically-bound-images/embed_image.sh "${img}" \
             --authfile /run/secrets/pull-secret.json || exit 1 ; \

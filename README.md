@@ -259,7 +259,8 @@ check, the polkit rule is the first by name, and the policy file parses.
   cable at every mission does. This is Red Hat's procedure for fully disconnected hosts.
 - **The NVIDIA device plugin**, so pods can request `nvidia.com/gpu`. CRI-O gets the NVIDIA
   runtime as its default (`/etc/crio/crio.conf.d/99-nvidia.toml`). The upstream plugin manifest
-  (v0.20.0) is patched from `microshift/manifests/` for **GPU time slicing**: the Orin has one
+  (v0.20.0) is patched from `microshift/manifests/` (installed in `/usr/lib/microshift/manifests`,
+  read-only, so no node can drift from the image) for **GPU time slicing**: the Orin has one
   integrated GPU, so the plugin advertises it as **4** `nvidia.com/gpu` so four pods can share
   it. There is no memory isolation between them, so 4 is a claim about what fits in the
   module's RAM. A second patch runs the plugin as SELinux type `spc_t`: as `container_t` it
@@ -276,7 +277,7 @@ image is embedded and pinned.
 
 ### services: what runs on the cluster
 
-`services/Containerfile` copies `services/manifests/` into `/etc/microshift/manifests.d/`,
+`services/Containerfile` copies `services/manifests/` into `/usr/lib/microshift/manifests.d/`,
 downloads the upstream installs (version-pinned ARGs), and embeds every image the rendered
 manifests name. MicroShift applies these kustomize roots itself at every start, **in name order**,
 retrying a failing root every 10 s for up to 10 minutes. That is how a root that needs another
