@@ -147,9 +147,11 @@ variant, not a variant of its own. Three things:
   [How a node runs with no registry](#how-a-node-runs-with-no-registry).
 - **`jtop`** (jetson-stats, pinned by `JTOP_VER`), installed with `pip3 install --prefix=/usr`:
   on bootc, `/usr/local` is per-machine state and would not ship in the image.
-- **Edge Manager agent** (`flightctl-agent` from ACM, `ACM_VER=2.15`, no weak deps so no greenboot).
+- **Edge Manager agent** (`flightctl-agent` from ACM, `ACM_VER=2.15`, no weak deps).
   Enabled but idle until `/etc/flightctl/config.yaml` exists; while it does,
   `bootc-fetch-apply-updates.service` is skipped, since Edge Manager owns OS updates.
+  The package's greenboot check passes while the agent is unenrolled; unguarded, it
+  failed every upgrade and greenboot rolled it back.
 
 Its smoke test checks the machinery and the agent are installed and enabled and `jtop` is
 present. It also fails if this layer embedded any image, since anything embedded here would be

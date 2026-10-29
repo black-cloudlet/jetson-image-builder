@@ -155,9 +155,14 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     is machine state on bootc). `python3-pip` comes from RHEL repos, so this layer needs
     entitlement. Whether `jtop` reaches the driver as installed is unverified.
   - `flightctl-agent` from `rhacm-${ACM_VER}-for-rhel-9-$(uname -m)-rpms`
-    (`ACM_VER=2.15`, match the hub), no weak deps (keeps greenboot out). Drop-ins key both
+    (`ACM_VER=2.15`, match the hub), no weak deps. Drop-ins key both
     the agent and `bootc-fetch-apply-updates.service` on `/etc/flightctl/config.yaml`: agent
-    idle and bootc upgrading before enrollment, the reverse after. Unverified until dispatched.
+    idle and bootc upgrading before enrollment, the reverse after. Idle is `inactive`, not
+    failed (seen on hardware). Greenboot is on the node anyway (`microshift-greenboot`), and
+    the package's required check waits 150 s for the agent to be active: unguarded, every
+    upgrade failed it, rebooted twice and rolled back. The build inserts
+    `[ -f /etc/flightctl/config.yaml ] || exit 0` as its second line (exactly one check
+    script, or the build fails); the smoke test runs it and fails unless it passes at once.
   Its smoke test fails if this layer has an image cache: anything here is paid by every variant.
 - `base/physically-bound-images/` — adapted from `redhat-et/edge-ai-image-pipelines`. Cache is
   `/usr/lib/containers-image-cache` with `mapping.txt` (reference → sha), copied into
@@ -446,7 +451,8 @@ hardware.
    `bootc status` (expect a digest-pinned GHCR origin, which cannot upgrade), `lsmod | grep
    nvgpu`, `nvidia-ctk cdi list` → `nvidia.com/gpu=all`, a GPU container, `systemctl
    is-enabled bootc-fetch-apply-updates.timer`, whether `jtop` works, and that
-   `flightctl-agent` is skipped on its condition, not restarting.
+   `journalctl -b -u greenboot-healthcheck` ends green after a `bootc upgrade` (the
+   rollback above).
 2. MicroShift: `systemctl status microshift`, `oc get pods -A` all running with no registry,
    `vgs` shows free extents, a PVC binds on topolvm. `ip addr show lo` has `10.44.0.1/32` and
    `oc get node -o wide` shows it; pull the cable for a minute and `NRestarts` must not move.
@@ -514,6 +520,11 @@ the frontend's video codec, preview size and on-screen keyboard.
 - Explanations in replies should be deep and line-by-line, not headline summaries.
 
 **Things that bit us — do not repeat.**
+
+- Greenboot runs every required check on every new deployment, and an RPM can bring one
+  (`flightctl-agent` did). A check that cannot pass on an unenrolled or disconnected node rolls
+  each upgrade back after the boot counter runs out. List `rpm -ql | grep greenboot/check`
+  for every package a layer adds.
 
 - bib's `[customizations.installer.bootloader.grub2] menu-timeout` parses but does nothing for
   `anaconda-iso`: osbuild/images honours it for bootc ISOs only from v80, and bib vendors
