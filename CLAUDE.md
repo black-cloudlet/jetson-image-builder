@@ -134,7 +134,8 @@ only. KServe was removed once before (`bba9d10`, reason unrecorded).
 - `install-offline.sh` — **as root on the station**: extracts to `/srv/repos/{baseos,appstream}`,
   writes `offline.repo` (`file://`, `gpgcheck=1`), disables the subscription-manager plugin,
   installs `dtc cpp binutils usbutils lz4` (`-P` skips). Repos only.
-- `README.md` — BSP links, extract, recovery mode, `flash.sh`.
+- `README.md` — BSP links, extract, recovery mode, `flash.sh`, then UEFI's display hand-off
+  to Never (the kiosk monitor stays black otherwise).
 
 Both are idempotent and have been run end to end: station provisioned, devkit QSPI flashed.
 
@@ -255,7 +256,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
       Jetson default, Auto, leaves UEFI's picture running when a monitor is connected at boot,
       and the image's driver cannot take it over: "Input Signal Not Found" after GRUB, with
       `NVRM_RPC_DCE: Failed RM ctrl call` for `0x731341` (DP AUX) and `0x731343` (link
-      training). Plugged in after boot it worked. Not in the flashing docs yet. Not the cause:
+      training). Plugged in after boot it worked. A step after every QSPI flash (installer
+      `README.md` §5; the flash resets it). Not the cause:
       the display firmware, QSPI layout and DTBs are byte-identical in R36.5.0 and R36.5.2.
     - `libEGL_nvidia.so.0` is in `/usr/lib64/tegra-egl`, outside the loader path; the vendor
       ships `tegra-egl/ld.so.conf` but never links it. Without it glvnd hands out Mesa's EGL,
