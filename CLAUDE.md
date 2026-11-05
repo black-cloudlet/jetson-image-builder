@@ -235,8 +235,18 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   the repo): the logo with the wordmark recoloured `#FFFFFF`/`#C9D1CF` for the greeter's dark
   grey (the original's near-black text vanished there), padding trimmed, 56 px tall. The avatar
   is the unit emblem (a 1920² PNG with transparent corners) at 236 px on a white 256×256
-  square: full size, its black ring sat on GNOME's circle crop and met the dark grey. The background stays: changing it means rebuilding
-  `gnome-shell-theme.gresource`. The build deletes every other session file: GDM pulls in GNOME Shell's
+  square: full size, its black ring sat on GNOME's circle crop and met the dark grey.
+  **Background** (the maintainer's request; the one package file this layer rewrites): GNOME 40
+  has no setting for it, only the theme's `#lockDialogGroup { background-color: #282828 }`
+  inside `/usr/share/gnome-shell/gnome-shell-theme.gresource`. A throwaway `shell-theme` stage
+  (`FROM kiosk`, installs `glib2-devel` for `gresource`/`glib-compile-resources`) runs
+  `kiosk/shell-theme.sh`: extracts every file, appends `kiosk/login-background.css` to
+  `gnome-shell.css` (last, so it wins), recompiles uncompressed, and fails unless the stock CSS
+  has `#lockDialogGroup`, the file list is unchanged and the CSS ends with ours; the final stage
+  `COPY --from`s only the result. `rpm -V gnome-shell` flags the file. `kiosk/login-background.png`
+  is the maintainer's 1920×1080 brand backdrop with its centre cloud and `CLOUDLET | MAMRAM`
+  removed (masked against a 61 px median and filled harmonically, so the glows' bands survive):
+  the user list sits in the centre and the logo at the bottom. `background-size: cover`. The build deletes every other session file: GDM pulls in GNOME Shell's
   (`gnome.desktop`, `gnome-wayland.desktop`), which the login screen's session menu would offer
   as a full desktop. RHEL 9's kiosk session is `gnome-kiosk-script`, not the newer
   `gnome-kiosk-script-wayland`: the first dispatch (run 40) failed on exactly that. The package
@@ -288,8 +298,9 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     with it as the credential and `systemd-tmpfiles --create` in the throwaway test container,
     as a boot would, and checks `kiosk` exists with that hash in `/etc/shadow`, the
     AccountsService session is the only session file the login screen offers, the logo
-    `DCONF_PROFILE=gdm dconf read` returns and the `Icon=` are PNGs in `/usr/share/jetson-kiosk`
-    (a stale database reads empty), the linked
+    `DCONF_PROFILE=gdm dconf read` returns, the `Icon=` and the last `url(file://…)` in the
+    theme resource are PNGs in `/usr/share/jetson-kiosk` (a stale database reads empty; a
+    reinstalled theme names none), the linked
     script is executable and parses,
     `gnome-kiosk-script` still execs `~/.local/bin/gnome-kiosk-script`, `sshd_config` still
     includes `sshd_config.d` (else `DenyUsers` is ignored silently), no terminal emulator or
@@ -505,7 +516,8 @@ hardware.
    write it when they refuse Wayland on a driver, and with no X server installed nothing would
    start: that is the case for `claude/kiosk-xorg-cpu`); the login screen still appears with GNOME
    Shell's session files deleted, and its gear lists only the kiosk session; it lists only `kiosk`,
-   with `avatar.png` as its picture and `login-logo.png` where Red Hat's logo was, the image's
+   with `avatar.png` as its picture, `login-logo.png` where Red Hat's logo was and
+   `login-background.png` filling the screen (not tiled, not grey: St parsed the rule), the image's
    password logs in, `ssh kiosk@` is refused, Ctrl-Alt-F3 and the serial console
    refuse `kiosk` and take `cloudlet`, `nmcli con mod` and `systemctl reboot` as `kiosk` are
    denied, `journalctl -b | grep -i polkit` shows nothing from the kiosk session breaking,

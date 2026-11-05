@@ -51,16 +51,20 @@ for cmd in firefox curl; do
 	command -v "$cmd" || fail "not on PATH: $cmd"
 done
 
-echo "== login screen logo and kiosk picture =="
+echo "== login screen logo, background and kiosk picture =="
 # dconf read shows no schema default, so a stale database, or a profile that no
 # longer reads it, reads empty here and leaves Red Hat's logo up. A missing or
 # undecodable file shows nothing; RHEL's gdk-pixbuf has no WebP loader, so PNG.
 logo=$(DCONF_PROFILE=gdm dconf read /org/gnome/login-screen/logo)
 logo=${logo//\'/}
 avatar=$(sed -n 's/^Icon=//p' "/var/lib/AccountsService/users/$user")
-for img in "$logo" "$avatar"; do
+# shell-theme.sh compiles the theme uncompressed, so the rule is plain text in
+# it; a later package that reinstalled the theme would drop it.
+theme=/usr/share/gnome-shell/gnome-shell-theme.gresource
+background=$(grep -ao 'url(file:///[^)]*)' "$theme" | sed 's/^url(file:\/\/\(.*\))$/\1/' | tail -1 || true)
+for img in "$logo" "$avatar" "$background"; do
 	[[ $img == /usr/share/jetson-kiosk/* ]] || {
-		echo "the greeter's logo is '$logo' and $user's picture '$avatar'; expected both in /usr/share/jetson-kiosk:"
+		echo "the greeter's logo is '$logo', its background '$background' (from $theme) and $user's picture '$avatar'; expected all in /usr/share/jetson-kiosk:"
 		ls -la /usr/share/jetson-kiosk /etc/dconf/db 2>&1 || true
 		exit 1
 	}
