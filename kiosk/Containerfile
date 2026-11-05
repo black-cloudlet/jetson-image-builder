@@ -22,18 +22,16 @@ RUN dnf install -y gdm gnome-kiosk-script-session firefox dejavu-sans-fonts && \
     systemctl set-default graphical.target && \
     dnf clean all
 
-# Wayland on NVIDIA's EGL, as seen on hardware. The vendor image ships
-# tegra-egl/ld.so.conf but never links it, so libEGL_nvidia does not load,
-# EGL falls back to Mesa and mutter refuses the GPU ("not supported by EGL").
-# GDM's 61-gdm.rules forces X on any NVIDIA driver without nvidia-sleep.sh,
-# which Tegra has not; masked, since Wayland works once EGL loads.
-RUN test -f /usr/lib64/tegra-egl/ld.so.conf || \
-        { echo "no /usr/lib64/tegra-egl/ld.so.conf: NVIDIA's EGL moved"; exit 1; }; \
-    test -f /usr/lib/udev/rules.d/61-gdm.rules || \
-        { echo "no /usr/lib/udev/rules.d/61-gdm.rules to mask"; exit 1; }; \
+# NVIDIA's EGL is outside the loader path; without it mutter gets Mesa's EGL
+# and refuses the GPU.
+RUN test -f /usr/lib64/tegra-egl/ld.so.conf || { echo "no /usr/lib64/tegra-egl/ld.so.conf"; exit 1; } && \
     ln -s /usr/lib64/tegra-egl/ld.so.conf /etc/ld.so.conf.d/nvidia-tegra-egl.conf && \
-    ldconfig && \
+    ldconfig
+
+# GDM's rule forces X on NVIDIA without nvidia-sleep.sh, which Tegra has not.
+RUN test -f /usr/lib/udev/rules.d/61-gdm.rules || { echo "no /usr/lib/udev/rules.d/61-gdm.rules to mask"; exit 1; } && \
     ln -s /dev/null /etc/udev/rules.d/61-gdm.rules
+
 COPY kiosk/gdm-nvidia-relabel.conf /usr/lib/systemd/system/gdm.service.d/50-jetson-nvidia.conf
 # Named after the file. -n: the build container has no policy to reload.
 COPY kiosk/jetson-gpu.cil /usr/share/selinux/packages/jetson-gpu.cil
