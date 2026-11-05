@@ -224,7 +224,15 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `/usr/libexec/jetson-kiosk/gnome-kiosk-script`, writes
   `/var/lib/AccountsService/users/kiosk` with `Session=gnome-kiosk-script`, and marks
   `cloudlet` `SystemAccount=true` so the login screen lists only `kiosk`: all `/var`, which the
-  image does not deploy. The build deletes every other session file: GDM pulls in GNOME Shell's
+  image does not deploy. Still one tap (or Enter) on `kiosk` before the password: GNOME Shell
+  40's greeter never selects a lone user itself (`loginDialog.js`), and `disable-user-list`
+  asks for a username instead; skipping it needs greeter code. **Branding**:
+  `kiosk/login-logo.png` replaces Red Hat's logo through `/etc/dconf/db/gdm.d/10-jetson-kiosk-logo`
+  and a build-time `dconf update` (Red Hat's is only a schema default, gdm's
+  `org.gnome.login-screen.gschema.override`; drawn at the file's own pixel size), and
+  `kiosk/avatar.png` is `kiosk`'s picture via `Icon=` in the AccountsService file; both land in
+  `/usr/share/jetson-kiosk/`, PNG only. The background stays: changing it means rebuilding
+  `gnome-shell-theme.gresource`. The build deletes every other session file: GDM pulls in GNOME Shell's
   (`gnome.desktop`, `gnome-wayland.desktop`), which the login screen's session menu would offer
   as a full desktop. RHEL 9's kiosk session is `gnome-kiosk-script`, not the newer
   `gnome-kiosk-script-wayland`: the first dispatch (run 40) failed on exactly that. The package
@@ -275,7 +283,9 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     reads the hash file the drop-in names, fails unless it is `0600`, runs `systemd-sysusers`
     with it as the credential and `systemd-tmpfiles --create` in the throwaway test container,
     as a boot would, and checks `kiosk` exists with that hash in `/etc/shadow`, the
-    AccountsService session is the only session file the login screen offers, the linked
+    AccountsService session is the only session file the login screen offers, the logo
+    `DCONF_PROFILE=gdm dconf read` returns and the `Icon=` are PNGs in `/usr/share/jetson-kiosk`
+    (a stale database reads empty), the linked
     script is executable and parses,
     `gnome-kiosk-script` still execs `~/.local/bin/gnome-kiosk-script`, `sshd_config` still
     includes `sshd_config.d` (else `DenyUsers` is ignored silently), no terminal emulator or
@@ -491,7 +501,8 @@ hardware.
    write it when they refuse Wayland on a driver, and with no X server installed nothing would
    start: that is the case for `claude/kiosk-xorg-cpu`); the login screen still appears with GNOME
    Shell's session files deleted, and its gear lists only the kiosk session; it lists only `kiosk`,
-   the image's password logs in, `ssh kiosk@` is refused, Ctrl-Alt-F3 and the serial console
+   with `avatar.png` as its picture and `login-logo.png` where Red Hat's logo was, the image's
+   password logs in, `ssh kiosk@` is refused, Ctrl-Alt-F3 and the serial console
    refuse `kiosk` and take `cloudlet`, `nmcli con mod` and `systemctl reboot` as `kiosk` are
    denied, `journalctl -b | grep -i polkit` shows nothing from the kiosk session breaking,
    `/usr/lib/jetson-kiosk/password-hash` is `0600 root`; Firefox opens on the URL; replug

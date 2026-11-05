@@ -38,6 +38,12 @@ COPY kiosk/sysusers-credential.conf \
 COPY kiosk/tmpfiles.conf /usr/lib/tmpfiles.d/jetson-kiosk.conf
 COPY --chmod=0555 kiosk/gnome-kiosk-script /usr/libexec/jetson-kiosk/gnome-kiosk-script
 
+# The login screen's logo and kiosk's picture. dconf update compiles
+# /etc/dconf/db/gdm, the only form the greeter reads.
+COPY --chmod=0644 kiosk/login-logo.png kiosk/avatar.png /usr/share/jetson-kiosk/
+COPY kiosk/gdm-logo.dconf /etc/dconf/db/gdm.d/10-jetson-kiosk-logo
+RUN dconf update
+
 # No autologin. The kiosk password opens neither ssh nor a console; GDM uses
 # gdm-password, not login.
 COPY kiosk/sshd-deny-kiosk.conf /etc/ssh/sshd_config.d/40-jetson-kiosk.conf

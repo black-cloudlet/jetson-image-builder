@@ -51,6 +51,24 @@ for cmd in firefox curl; do
 	command -v "$cmd" || fail "not on PATH: $cmd"
 done
 
+echo "== login screen logo and kiosk picture =="
+# dconf read shows no schema default, so a stale database, or a profile that no
+# longer reads it, reads empty here and leaves Red Hat's logo up. A missing or
+# undecodable file shows nothing; RHEL's gdk-pixbuf has no WebP loader, so PNG.
+logo=$(DCONF_PROFILE=gdm dconf read /org/gnome/login-screen/logo)
+logo=${logo//\'/}
+avatar=$(sed -n 's/^Icon=//p' "/var/lib/AccountsService/users/$user")
+for img in "$logo" "$avatar"; do
+	[[ $img == /usr/share/jetson-kiosk/* ]] || {
+		echo "the greeter's logo is '$logo' and $user's picture '$avatar'; expected both in /usr/share/jetson-kiosk:"
+		ls -la /usr/share/jetson-kiosk /etc/dconf/db 2>&1 || true
+		exit 1
+	}
+	[[ -f $img ]] || fail "$img, named by the login screen, is not in the image"
+	[[ $(head -c 8 "$img" | od -An -tx1 | tr -d ' \n') == 89504e470d0a1a0a ]] \
+		|| fail "$img is not a PNG"
+done
+
 echo "== no way out of the session =="
 # A terminal or file manager is one handler away.
 for app in gnome-terminal ptyxis kgx xterm konsole foot nautilus; do
