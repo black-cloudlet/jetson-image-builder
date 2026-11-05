@@ -233,8 +233,9 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `kiosk/avatar.png` is `kiosk`'s picture via `Icon=` in the AccountsService file; both land in
   `/usr/share/jetson-kiosk/`, PNG only. Both come from `cloudlet-logo-light-bg.svg` (not in
   the repo): the logo with the wordmark recoloured `#FFFFFF`/`#C9D1CF` for the greeter's dark
-  grey (the original's near-black text vanished there), padding trimmed, 56 px tall; the avatar
-  is the cloud alone on white, 256×256, inside GNOME's circle crop. The background stays: changing it means rebuilding
+  grey (the original's near-black text vanished there), padding trimmed, 56 px tall. The avatar
+  is the unit emblem (a 1920² PNG with transparent corners) at 236 px on a white 256×256
+  square: full size, its black ring sat on GNOME's circle crop and met the dark grey. The background stays: changing it means rebuilding
   `gnome-shell-theme.gresource`. The build deletes every other session file: GDM pulls in GNOME Shell's
   (`gnome.desktop`, `gnome-wayland.desktop`), which the login screen's session menu would offer
   as a full desktop. RHEL 9's kiosk session is `gnome-kiosk-script`, not the newer
