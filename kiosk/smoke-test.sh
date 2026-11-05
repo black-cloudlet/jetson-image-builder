@@ -64,6 +64,17 @@ ldconfig -p | grep -q "^[[:space:]]*$lib .*=> /" || {
 	exit 1
 }
 
+# device_t otherwise, and the login screen is denied the nodes. A missing node
+# is fine: the lookup is by path and type.
+for node in /dev/nvmap /dev/nvhost-ctrl-gpu /dev/nvgpu/igpu0/ctrl; do
+	ctx=$(matchpathcon -m c "$node" | awk '{print $2}')
+	[[ $ctx == *:dri_device_t:* ]] || {
+		echo "$node would be labelled '$ctx', not dri_device_t; installed modules:"
+		semodule -l | grep -i jetson || true
+		exit 1
+	}
+done
+
 echo "== no way out of the session =="
 # A terminal or file manager is one handler away.
 for app in gnome-terminal ptyxis kgx xterm konsole foot nautilus; do

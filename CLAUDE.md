@@ -265,8 +265,10 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
       `nvidia-sleep.sh`, which Tegra has not: masked in `/etc/udev/rules.d`.
     - `gdm` and `kiosk` in `video` (sysusers `m`): `nvmap`, `nvhost-*` and `nvgpu/*` are
       `root:video 0660`, as on NVIDIA's own Ubuntu (`99-tegra-devices.rules`).
-    - SELinux module `jetson-gpu`: those nodes are `device_t` and the login screen (`xdm_t`) is
-      denied them; labelled `dri_device_t`. The session runs unconfined.
+    - SELinux module `jetson-gpu` (`kiosk/jetson-gpu.cil`, `semodule -n -i` at build; a module
+      is named after its file, and jetson-1's hand-made one is `jetson-root`): those nodes are
+      `device_t` and the login screen (`xdm_t`) is denied them; labelled `dri_device_t`. The
+      session runs unconfined.
     - A `gdm.service` drop-in `restorecon`s `/dev/nvidia-modeset` first: NVIDIA's udev rule
       `mknod`s it, so it is `device_t` every boot though the policy says
       `xserver_misc_device_t`.
@@ -308,7 +310,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     `gnome-kiosk-script` still execs `~/.local/bin/gnome-kiosk-script`, `sshd_config` still
     includes `sshd_config.d` (else `DenyUsers` is ignored silently), no terminal emulator or
     file manager got pulled in, `kiosk` has no group but its own and `video`, `gdm` is in
-    `video`, the loader cache has the library NVIDIA's EGL vendor file names, `/etc/pam.d/login`'s first
+    `video`, the loader cache has the library NVIDIA's EGL vendor file names, `matchpathcon`
+    gives `dri_device_t` for `nvmap`, `nvhost-*` and `nvgpu/*`, `/etc/pam.d/login`'s first
     `account` line refuses `kiosk`, `10-jetson-kiosk.rules` is the first polkit rule by name,
     and the policy parses.
     Locally: the hash step against good, missing, empty, plaintext and multi-line input; sysusers

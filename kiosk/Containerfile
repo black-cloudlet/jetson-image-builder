@@ -35,6 +35,9 @@ RUN test -f /usr/lib64/tegra-egl/ld.so.conf || \
     ldconfig && \
     ln -s /dev/null /etc/udev/rules.d/61-gdm.rules
 COPY kiosk/gdm-nvidia-relabel.conf /usr/lib/systemd/system/gdm.service.d/50-jetson-nvidia.conf
+# Named after the file. -n: the build container has no policy to reload.
+COPY kiosk/jetson-gpu.cil /usr/share/selinux/packages/jetson-gpu.cil
+RUN semodule -n -i /usr/share/selinux/packages/jetson-gpu.cil
 
 # A node that suspends stops MicroShift until a key is pressed; GNOME's login
 # screen may suspend on idle. Masked for every caller, not only GNOME.
