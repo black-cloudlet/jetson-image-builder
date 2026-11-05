@@ -12,6 +12,19 @@ RUN dnf install -y python3 python3-pip && \
 # The group jetson-stats grants jtop access through.
 RUN groupadd -r jtop
 
+# jtop is a client of jtop.service (it reads /run/jtop.sock). The wheel ships the
+# unit only as a template saying /usr/local/bin/jtop. Run as root, jtop copies that
+# template to /etc/systemd/system, enables it and starts it, and since jtop is in
+# /usr/bin here the unit sat in "activating" forever (seen on hardware). Fix the
+# template, so `jtop --install-service` writes a working unit too, and install the
+# unit where jtop checks for it, so jtop never installs it itself.
+RUN unit=/usr/share/jetson_stats/jtop.service; \
+    grep -q '^ExecStart=/usr/local/bin/jtop ' "$unit" || \
+        { echo "unexpected ExecStart in $unit:"; grep ExecStart "$unit"; exit 1; }; \
+    sed -i 's|^ExecStart=/usr/local/bin/jtop |ExecStart=/usr/bin/jtop |' "$unit" && \
+    cp "$unit" /etc/systemd/system/jtop.service && \
+    systemctl enable jtop.service
+
 # From redhat-et/edge-ai-image-pipelines (Apache-2.0). The cache is a plain
 # directory, not an additional store: images pulled later would reuse its
 # layers, and an upgrade that drops one breaks them (RHEL-75827).

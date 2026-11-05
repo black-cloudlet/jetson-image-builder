@@ -153,7 +153,13 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     from `base/physically-bound-images/`.
   - `jetson-stats` (`jtop`, pinned `JTOP_VER`) via `pip3 install --prefix=/usr` (`/usr/local`
     is machine state on bootc). `python3-pip` comes from RHEL repos, so this layer needs
-    entitlement. Whether `jtop` reaches the driver as installed is unverified.
+    entitlement. `jtop` is a client of `jtop.service` (`/run/jtop.sock`). The wheel ships
+    the unit only as a template (`/usr/share/jetson_stats/`) saying `/usr/local/bin/jtop`, and
+    root's first `jtop` copies it into `/etc/systemd/system` when none is there: on hardware
+    that unit sat in `activating` forever. The build fixes the template's path and installs it
+    as `/etc/systemd/system/jtop.service`, enabled: in `/etc` because that is the path jtop
+    checks (a symlink there to `/usr/lib` is `bad` to systemd). The smoke test fails unless the
+    unit's `ExecStart` binary is executable. Whether `jtop` reaches the driver is unverified.
   - `flightctl-agent` from `rhacm-${ACM_VER}-for-rhel-9-$(uname -m)-rpms`
     (`ACM_VER=2.15`, match the hub), no weak deps. Drop-ins key both
     the agent and `bootc-fetch-apply-updates.service` on `/etc/flightctl/config.yaml`: agent
