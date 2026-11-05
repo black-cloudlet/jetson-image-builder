@@ -190,8 +190,10 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     would delete it. So no `registries.conf` mirror for a pinned registry, and air-gapped app
     layers embed from `<registry>/embedded/*`, pull from `<registry>/apps/*`. Both smoke tests
     check every `mapping.txt` reference against `crio config`. GC thresholds are untouched.
-- `kiosk/Containerfile` — **written, built by nothing yet, unverified on hardware.** Red Hat's
-  documented kiosk, kept deliberately plain: `dnf install gdm gnome-kiosk-script-session firefox
+- `kiosk/Containerfile` — **its display fixes were found on hardware by hand (jetson-1,
+  2026-11); the image with them is unbuilt.** Red Hat's
+  documented kiosk, kept deliberately plain, plus fixes for gaps in the vendor image (below):
+  `dnf install gdm gnome-kiosk-script-session firefox
   dejavu-sans-fonts` (DejaVu covers Hebrew), `systemctl enable gdm`, `set-default
   graphical.target`. **No autologin**: GDM's login screen asks for `kiosk`'s password (the
   maintainer's call). The password is **in the image**, not the kickstart (the maintainer's
@@ -214,7 +216,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   through it. `/usr/share/polkit-1/rules.d/10-jetson-kiosk.rules` answers NO to every polkit
   action for `kiosk` (an active local session may otherwise reboot, change system network
   settings, `pkexec`); `10-` so it is the first rule by name across `/etc` and `/usr/share`,
-  which is the order polkit asks them in. `kiosk` is in no group but its own, so no `sudo`.
+  which is the order polkit asks them in. `kiosk` is in its own group and `video` (the GPU
+  nodes, below), so no `sudo`.
   Not done: a confined SELinux user (`user_u`, `user_exec_content` off) would also stop it
   running what it downloads, but whether a confined user can open the Tegra display and GPU
   nodes is unknown, and `kiosk` exists only from first boot; revisit after hardware. Code
@@ -241,10 +244,35 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   - **The vendor image has the display stack** (inspected 2026-10-21): `nvidia.ko`,
     `nvidia-modeset.ko`, `nvidia-drm.ko` under `updates/opensrc-disp/`, `nvidia-drm modeset=1
     fbdev=1`, NVIDIA's EGL vendor file, `libnvidia-egl-gbm`, `libnvidia-egl-wayland`,
-    `gbm/nvidia-drm_gbm.so`, and an Xorg `nvidia_drv.so` with no X server.
-    `load-nvidia-drm.service` is `WantedBy=graphical.target` and the vendor sets
+    `gbm/nvidia-drm_gbm.so`, and an Xorg `nvidia_drv.so` (Xorg itself comes in with `gdm`; it
+    ran on hardware). `load-nvidia-drm.service` is `WantedBy=graphical.target` and the vendor sets
     `multi-user.target`, so the display driver loads only because this layer switches the
     target. Video decode is CPU either way (no VA-API on Tegra).
+  - **Display fixes, found on hardware** (jetson-1, 2026-11; each removed alone brought its
+    failure back). Gaps in the vendor image, worth a Red Hat case, not features:
+    - **Firmware, not the image:** UEFI's *SOC Display Hand-Off Mode* must be **Never** (ESC →
+      Device Manager → NVIDIA Configuration → Boot Configuration; a UEFI variable in QSPI). The
+      Jetson default, Auto, leaves UEFI's picture running when a monitor is connected at boot,
+      and the image's driver cannot take it over: "Input Signal Not Found" after GRUB, with
+      `NVRM_RPC_DCE: Failed RM ctrl call` for `0x731341` (DP AUX) and `0x731343` (link
+      training). Plugged in after boot it worked. Not in the flashing docs yet. Not the cause:
+      the display firmware, QSPI layout and DTBs are byte-identical in R36.5.0 and R36.5.2.
+    - `libEGL_nvidia.so.0` is in `/usr/lib64/tegra-egl`, outside the loader path; the vendor
+      ships `tegra-egl/ld.so.conf` but never links it. Without it glvnd hands out Mesa's EGL,
+      mutter says `The GPU /dev/dri/card1 chosen as primary is not supported by EGL` and GDM
+      falls back to X. Linked into `/etc/ld.so.conf.d`, `ldconfig` at build.
+    - GDM's `61-gdm.rules` writes `WaylandEnable=false` for any NVIDIA driver without
+      `nvidia-sleep.sh`, which Tegra has not: masked in `/etc/udev/rules.d`.
+    - `gdm` and `kiosk` in `video` (sysusers `m`): `nvmap`, `nvhost-*` and `nvgpu/*` are
+      `root:video 0660`, as on NVIDIA's own Ubuntu (`99-tegra-devices.rules`).
+    - SELinux module `jetson-gpu`: those nodes are `device_t` and the login screen (`xdm_t`) is
+      denied them; labelled `dri_device_t`. The session runs unconfined.
+    - A `gdm.service` drop-in `restorecon`s `/dev/nvidia-modeset` first: NVIDIA's udev rule
+      `mknod`s it, so it is `device_t` every boot though the policy says
+      `xserver_misc_device_t`.
+    - `sleep`, `suspend`, `hibernate`, `hybrid-sleep` targets masked: GNOME's login screen may
+      suspend on idle, and a suspended node stops MicroShift. Blanking is left at GNOME's
+      default (the maintainer's call).
   - **Input**: `usbhid`, `hid-generic`, `evdev` built in; `hid-multitouch`, `wacom`, `hid-elan`
     as modules, so USB keyboards, mice and HID touch screens work through libinput; non-HID
     touch controllers (`CONFIG_INPUT_TOUCHSCREEN` off) do not. Layout `us` from the kickstart.
@@ -269,8 +297,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     on tty1 instead of GDM, with CPU/memory caps; a GPU variant with GNOME Kiosk as a bare
     Wayland compositor and a smoke test requiring NVIDIA's EGL/GBM (`a4607a1`). Go back to one
     only for a measured reason. The CPU-only variant (Xorg `modesetting`, no acceleration,
-    custom service) is kept as branch `claude/kiosk-xorg-cpu` (`9ba1b12`): the fallback if GDM
-    refuses Wayland on NVIDIA or GNOME will not start on the Jetson's display stack.
+    custom service) is kept as branch `claude/kiosk-xorg-cpu` (`9ba1b12`); not needed since
+    GDM runs Wayland on NVIDIA's EGL on hardware with the fixes above.
   - Smoke test: default target `graphical.target` and `display-manager.service` → gdm; then it
     reads the hash file the drop-in names, fails unless it is `0600`, runs `systemd-sysusers`
     with it as the credential and `systemd-tmpfiles --create` in the throwaway test container,
@@ -279,7 +307,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
     script is executable and parses,
     `gnome-kiosk-script` still execs `~/.local/bin/gnome-kiosk-script`, `sshd_config` still
     includes `sshd_config.d` (else `DenyUsers` is ignored silently), no terminal emulator or
-    file manager got pulled in, `kiosk` has no group but its own, `/etc/pam.d/login`'s first
+    file manager got pulled in, `kiosk` has no group but its own and `video`, `gdm` is in
+    `video`, the loader cache has the library NVIDIA's EGL vendor file names, `/etc/pam.d/login`'s first
     `account` line refuses `kiosk`, `10-jetson-kiosk.rules` is the first polkit rule by name,
     and the policy parses.
     Locally: the hash step against good, missing, empty, plaintext and multi-line input; sysusers
@@ -486,10 +515,11 @@ hardware.
    /dev/nvhost-ctrl-gpu /dev/nvmap`; if `root:video 0660`, add `supplementalGroups` on the
    InferenceService or CRI-O's `device_ownership_from_security_context`). Then `oci://` with an
    embedded modelcar image, proving the `uidModelcar` change.
-6. Kiosk, with a monitor on DP: `lsmod | grep -E 'nvidia_drm|nvidia_modeset'` and
-   `/dev/dri/card*`; `/run/gdm/custom.conf` without `WaylandEnable=false` (GDM's udev rules
-   write it when they refuse Wayland on a driver, and with no X server installed nothing would
-   start: that is the case for `claude/kiosk-xorg-cpu`); the login screen still appears with GNOME
+6. Kiosk, with a monitor on DP **from power-on** and UEFI's display hand-off at Never:
+   `lsmod | grep -E 'nvidia_drm|nvidia_modeset'` and `/dev/dri/card*`; `loginctl
+   show-session <id> -p Type` says `wayland` for the login screen and the kiosk session, and
+   `/run/gdm/custom.conf` does not exist; `lsof` shows `gnome-shell` (`gdm`) and the kiosk's
+   processes holding `/dev/nvmap`; the login screen still appears with GNOME
    Shell's session files deleted, and its gear lists only the kiosk session; it lists only `kiosk`,
    the image's password logs in, `ssh kiosk@` is refused, Ctrl-Alt-F3 and the serial console
    refuse `kiosk` and take `cloudlet`, `nmcli con mod` and `systemctl reboot` as `kiosk` are
@@ -498,7 +528,8 @@ hardware.
    the cable and the picture returns; the screen does not blank; a USB keyboard, mouse and touch
    screen all drive the page, and whether the login screen offers an on-screen keyboard on touch;
    Shift held while Firefox restarts opens no troubleshoot dialog, Ctrl-P prints nothing;
-   `ausearch -m avc` clean; `about:support` for what Firefox draws with; `tegrastats` and
+   `journalctl -b | grep -E 'avc: +denied'` clean (`ausearch` is not installed); `systemctl
+   suspend` refused; `tegrastats` and
    Triton's p99 latency with the screen on and off. If the frontend plays H.264, it is a black
    box.
 7. Later layers `FROM` the k8s image: a `bootc switch` unit for the air-gapped registry,
@@ -546,6 +577,9 @@ the frontend's video codec, preview size and on-screen keyboard.
 - `apt-get --download-only install` skips installed packages; a Debian bundle needs a clean
   container with separate download and index stages (legacy, from the Ubuntu evaluation).
 - `rockylinux:9`, not UBI, for any RPM-bundling builder; UBI lacks packages.
+- A monitor plugged in after boot hides the display hand-off failure: test with DP connected
+  from power-on. `libEGL warning: DRI3 error` in the journal means Mesa's EGL answered, not
+  NVIDIA's. Restarting GDM is not a test of the display; a reboot is.
 - Every base-image bump can break the GPU (the kmod is tied to one kernel). A container smoke
   test proves nothing about the GPU; boot hardware before promoting a tag.
 - `nvidia-ctk runtime configure --config=…/99-nvidia.conf` writes `99-nvidia.toml` and exits 0.

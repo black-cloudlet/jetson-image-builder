@@ -22,6 +22,24 @@ RUN dnf install -y gdm gnome-kiosk-script-session firefox dejavu-sans-fonts && \
     systemctl set-default graphical.target && \
     dnf clean all
 
+# Wayland on NVIDIA's EGL, as seen on hardware. The vendor image ships
+# tegra-egl/ld.so.conf but never links it, so libEGL_nvidia does not load,
+# EGL falls back to Mesa and mutter refuses the GPU ("not supported by EGL").
+# GDM's 61-gdm.rules forces X on any NVIDIA driver without nvidia-sleep.sh,
+# which Tegra has not; masked, since Wayland works once EGL loads.
+RUN test -f /usr/lib64/tegra-egl/ld.so.conf || \
+        { echo "no /usr/lib64/tegra-egl/ld.so.conf: NVIDIA's EGL moved"; exit 1; }; \
+    test -f /usr/lib/udev/rules.d/61-gdm.rules || \
+        { echo "no /usr/lib/udev/rules.d/61-gdm.rules to mask"; exit 1; }; \
+    ln -s /usr/lib64/tegra-egl/ld.so.conf /etc/ld.so.conf.d/nvidia-tegra-egl.conf && \
+    ldconfig && \
+    ln -s /dev/null /etc/udev/rules.d/61-gdm.rules
+COPY kiosk/gdm-nvidia-relabel.conf /usr/lib/systemd/system/gdm.service.d/50-jetson-nvidia.conf
+
+# A node that suspends stops MicroShift until a key is pressed; GNOME's login
+# screen may suspend on idle. Masked for every caller, not only GNOME.
+RUN systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+
 # The login screen's session menu offers every file here, and gdm pulls in
 # GNOME Shell's: a full desktop for whoever has the kiosk password. Keep only
 # the kiosk session (RHEL 9 names it gnome-kiosk-script, no -wayland).
