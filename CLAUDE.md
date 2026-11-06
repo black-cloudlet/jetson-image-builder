@@ -152,7 +152,8 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   - `embed_image.sh`, `copy_embedded_images.sh` and `copy-embedded-images.service`, `COPY`d
     from `base/physically-bound-images/`.
   - `jetson-stats` (`jtop`, pinned `JTOP_VER`) via `pip3 install --prefix=/usr` (`/usr/local`
-    is machine state on bootc). `python3-pip` comes from RHEL repos, so this layer needs
+    is machine state on bootc) `--only-binary=:all:` (the sdist's `setup.py` would install the
+    unit and `groupadd jtop` itself, as root, in the build). `python3-pip` comes from RHEL repos, so this layer needs
     entitlement. `jtop` is a client of `jtop.service` (`/run/jtop.sock`). The wheel ships
     the unit only as a template (`/usr/share/jetson_stats/`) saying `/usr/local/bin/jtop`, and
     root's first `jtop` copies it into `/etc/systemd/system` when none is there: on hardware

@@ -4,20 +4,19 @@ ARG BASE_IMAGE=ghcr.io/black-cloudlet/jetson-orin-bootc-base:latest
 FROM ${BASE_IMAGE}
 
 # --prefix=/usr: /usr/local is machine state on bootc and would not survive.
+# --only-binary: the sdist's setup.py would install the unit and group itself.
 ARG JTOP_VER=7.2.1
 RUN dnf install -y python3 python3-pip && \
-    pip3 install --prefix=/usr --no-cache-dir "jetson-stats==${JTOP_VER}" && \
+    pip3 install --prefix=/usr --no-cache-dir --only-binary=:all: \
+        "jetson-stats==${JTOP_VER}" && \
     dnf clean all
 
 # The group jetson-stats grants jtop access through.
 RUN groupadd -r jtop
 
-# jtop is a client of jtop.service (it reads /run/jtop.sock). The wheel ships the
-# unit only as a template saying /usr/local/bin/jtop. Run as root, jtop copies that
-# template to /etc/systemd/system, enables it and starts it, and since jtop is in
-# /usr/bin here the unit sat in "activating" forever (seen on hardware). Fix the
-# template, so `jtop --install-service` writes a working unit too, and install the
-# unit where jtop checks for it, so jtop never installs it itself.
+# The wheel's unit template runs /usr/local/bin/jtop; root's first jtop installs it
+# as is, and it never started (seen on hardware). Fix the path, and put the unit
+# where jtop looks, so it never installs its own.
 RUN unit=/usr/share/jetson_stats/jtop.service; \
     grep -q '^ExecStart=/usr/local/bin/jtop ' "$unit" || \
         { echo "unexpected ExecStart in $unit:"; grep ExecStart "$unit"; exit 1; }; \
