@@ -441,7 +441,8 @@ strips `metacopy` and fails unless `podman info` reports `Native Overlay Diff:tr
 
 1. Install podman and jq in the UBI container and register with Red Hat.
 2. Move container storage onto `/scratch`.
-3. Compute tags and validate them *before* the build.
+3. Compute the tags (`latest` and `stable` only on `main`) and validate the `also-as` name
+   *before* the build.
 4. Log in to GHCR and write the OpenShift pull secret (build-time only, never in the image).
 5. Build the layer with the **repository root as context**, `BASE_IMAGE` set to the previous
    layer's **digest**.
@@ -455,12 +456,15 @@ strips `metacopy` and fails unless `podman info` reports `Native Overlay Diff:tr
 
 Every layer is published under these tags, all naming the same manifest:
 
-| Tag | Meaning |
-|---|---|
-| `<YYYYMMDD>-<sha8>` | immutable: what a node rolls back to, what a mirror keeps |
-| `latest` | the last build |
-| `stable` | the release set: all five layers from one run, mirrored together |
-| `4.20` | the MicroShift minor, on `microshift` and `services` only; set from the same line as the build's `USHIFT_VER`, so the tag cannot claim a version it was not built from |
+| Tag | Pushed | Meaning |
+|---|---|---|
+| `<YYYYMMDD>-<sha8>` | every build | immutable: what a node rolls back to, what a mirror keeps |
+| `latest` | builds of `main` only | the last build of `main` |
+| `stable` | builds of `main` only | the release set: all five layers from one run, mirrored together |
+
+A branch dispatched to test it gets only the immutable tag, so it never moves what anything
+upgrading follows. The MicroShift version is not a tag; it is `USHIFT_VER` in
+`microshift/Containerfile`, the one place it is set.
 
 ### The ISO (`build-iso.yml`)
 

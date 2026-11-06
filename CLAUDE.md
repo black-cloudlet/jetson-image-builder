@@ -485,9 +485,10 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
 - `.github/workflows/build-image.yml` — **reusable**: register, bind storage for native
   overlay, write the pull secret, build, run the smoke test inside the result, push
   `ghcr.io/<owner>/ultron-<name>`, output the digest-pinned ref, and report the
-  layer size as a `::notice`. Tags: `<YYYYMMDD-sha8>`, `latest`, and `extra-tags` (`stable`
-  on all five layers; `4.20` on the two with MicroShift, passed from the same lines as
-  `USHIFT_VER` so the tag cannot lie). Tags are validated before the build. `also-as` pushes
+  layer size as a `::notice`. Tags: `<YYYYMMDD-sha8>` on every build; `latest` and `stable`
+  only when `GITHUB_REF` is `refs/heads/main` (the caller's ref), so dispatching a branch to
+  test it moves neither. No MicroShift-version tag: `USHIFT_VER` is set once, as the
+  Containerfile's `ARG` default. The `also-as` name is validated before the build. `also-as` pushes
   the same tags under a second name: `services` is also `ghcr.io/<owner>/ultron`, the finished
   OS under the project's name. Its digest should equal the first (same compressed layers); a
   mismatch is a `::warning`, not a failure, since nothing builds on it. The ISO and the chain
@@ -584,7 +585,8 @@ hardware.
 layer above `services/`; what External Secrets reads from; NVMe before real apps land;
 registration vs. a self-hosted runner; per-device address and hostname before a second node;
 how `/etc/flightctl/config.yaml` reaches a node, and greenboot; `bootc switch` vs. retag for the
-node's origin, and whether `stable` moves on every green build or only after a hardware boot;
+node's origin, and whether `stable` should wait for a hardware boot (today it moves on every green build of
+`main`);
 lowering kubelet's image GC thresholds below the eviction line (only matters once images are
 pulled); whether the `services/` resource sizes survive hardware (the ratios are enforced, the
 sizes are guesses); the kiosk's `KIOSK_URL`, what the screen costs Triton once measured, and

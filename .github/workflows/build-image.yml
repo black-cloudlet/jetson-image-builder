@@ -24,12 +24,6 @@ on:
         description: newline-separated KEY=VALUE pairs
         type: string
         default: ""
-      extra-tags:
-        description: |
-          moving tags pushed alongside <date>-<sha8> and latest, whitespace
-          separated. All of them point at the same digest.
-        type: string
-        default: ""
       also-as:
         description: |
           a second image name, ghcr.io/<owner>/<also-as>, pushed with the same
@@ -106,29 +100,23 @@ jobs:
           grep -q 'Native Overlay Diff:true' /tmp/graph \
             || { echo "::error::podman is not on native overlay; layer commits will take minutes each"; exit 1; }
 
-      # One immutable tag, then whatever moving ones the caller asked for. The
-      # immutable one is what a node is rolled back to and what the mirror keeps;
-      # the moving ones are what something upgrading follows.
+      # One immutable tag on every build: what a node is rolled back to and what
+      # the mirror keeps. latest and stable, what something upgrading follows,
+      # move only on main, so a branch dispatched to test it cannot move them.
       - name: Compute tags
         id: meta
         env:
-          EXTRA_TAGS: ${{ inputs.extra-tags }}
           ALSO_AS: ${{ inputs.also-as }}
         run: |
           tag="$(date -u +%Y%m%d)-${GITHUB_SHA::8}"
-          # Unquoted on purpose: splits on any whitespace, newlines included.
-          tags="$(echo $tag latest $EXTRA_TAGS)"
-          # Before the build rather than after it: a tag podman rejects should
+          tags="$tag"
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            tags="$tag latest stable"
+          else
+            echo "::notice::$GITHUB_REF is not main: pushing $tag only, not latest or stable"
+          fi
+          # Before the build rather than after it: a name podman rejects should
           # not cost twenty minutes first.
-          for t in $tags; do
-            case $t in
-              [A-Za-z0-9_]*) ;;
-              *) echo "::error::not a usable image tag: ${t}"; exit 1 ;;
-            esac
-            case $t in
-              *[!A-Za-z0-9._-]*) echo "::error::not a usable image tag: ${t}"; exit 1 ;;
-            esac
-          done
           case $ALSO_AS in
             '') ;;
             [a-z0-9]*[!a-z0-9._-]*|[!a-z0-9]*) echo "::error::not a usable image name: ${ALSO_AS}"; exit 1 ;;
