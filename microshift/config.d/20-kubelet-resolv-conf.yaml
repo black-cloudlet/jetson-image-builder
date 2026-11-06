@@ -1,0 +1,4 @@
+# dns=dnsmasq leaves 127.0.0.1 in /etc/resolv.conf, which inside CoreDNS is the
+# pod itself. This file has the real nameservers.
+kubelet:
+  resolvConf: /run/NetworkManager/no-stub-resolv.conf

@@ -1,6 +1,14 @@
-# Layer 1, shared: the vendor image republished under a name we control.
+# Layer 1, shared: the vendor image under a name we control, plus field tools.
 # Pinned, never a floating tag — the Tegra kmod is tied to this kernel build.
 ARG BASE=quay.io/redhat-user-workloads/jetpack-for-rhel-tenant/rhel-98-bootc:6.2.2_5.14.0-687.42.1_090326003719
 FROM ${BASE}
+
+# A node has no repo and a read-only /usr: what a maintainer needs must be here.
+# Some come with the vendor image, listed so a base bump cannot drop them.
+# sysstat keeps RHEL's preset: sar logs to /var/log/sa every 10 min.
+RUN dnf install -y --setopt=install_weak_deps=False \
+        bind-utils ethtool lsof mtr NetworkManager-tui nmap-ncat pciutils psmisc \
+        sos strace sysstat tcpdump tmux usbutils && \
+    dnf clean all
 
 RUN bootc container lint

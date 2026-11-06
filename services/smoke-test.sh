@@ -25,7 +25,7 @@ echo "== renders =="
 # empty patch never contacts a server; it parses the render and prints it back
 # as JSON, which jq can then query.
 render=$(mktemp -d)
-roots=(/etc/microshift/manifests.d/*/)
+roots=(/usr/lib/microshift/manifests.d/*/)
 for root in "${roots[@]}"; do
 	name=$(basename "$root")
 	oc kustomize "$root" | oc patch --local -f - --type=merge -p '{}' -o json |
@@ -79,11 +79,11 @@ echo "== external secrets is out of the default namespace =="
 # Checked on the render, not the patches: which fields the namespace
 # transformer reaches depends on the kustomize version, and one it misses is a
 # silent no-op.
-jq -e 'any(.[]; .kind == "Namespace" and .metadata.name == "external-secrets")' \
+jq -e 'any(.[]; .kind == "Namespace" and .metadata.name == "external-secrets-operator")' \
 	"$eso" >/dev/null \
-	|| fail "the render creates no external-secrets namespace;" \
+	|| fail "the render creates no external-secrets-operator namespace;" \
 		"nothing else in the root can be applied without it"
-echo "   Namespace/external-secrets is in the render"
+echo "   Namespace/external-secrets-operator is in the render"
 # Every string value outside the CRDs, whose schemas are full of the word:
 # metadata, a subject, a webhook clientConfig, a service DNS name inside an
 # argument. Case-sensitive, so RuntimeDefault is not a false alarm.
@@ -301,5 +301,32 @@ done < "$cache/mapping.txt"
 # fitting.
 echo "embedded: $(wc -l < "$cache/mapping.txt") images"
 du -sh "$cache"
+
+echo "== embedded images pinned =="
+# From `crio config`, the merged drop-ins: catches a list replaced by a later
+# drop-in, a registry missing from it, and an upstream that moved registry.
+cfg=$(crio config) || fail "crio config failed; its stderr is above"
+mapfile -t pins < <(sed -n '/^[[:space:]]*pinned_images = \[/,/^[[:space:]]*\]/s/^[[:space:]]*"\(.*\)",$/\1/p' <<<"$cfg")
+(( ${#pins[@]} )) || fail "crio config pins no images:" \
+	"$(grep -n -A8 'pinned_images' <<<"$cfg")"
+# CRI-O's three pattern forms: *keyword*, prefix* and exact.
+pinned() {
+	local p
+	for p in "${pins[@]}"; do
+		case $p in
+		\**\*) [[ $1 == *"${p:1:${#p}-2}"* ]] ;;
+		*\*) [[ $1 == "${p%\*}"* ]] ;;
+		*) [[ $1 == "$p" ]] ;;
+		esac && return 0
+	done
+	return 1
+}
+unpinned=()
+while IFS=, read -r img sha; do
+	pinned "$img" || unpinned+=("$img")
+done < "$cache/mapping.txt"
+(( ${#unpinned[@]} == 0 )) || fail "embedded but not pinned by crio config" \
+	"(${pins[*]}), so kubelet may delete them: ${unpinned[*]}"
+echo "   pinned: ${pins[*]}"
 
 echo "all checks passed"

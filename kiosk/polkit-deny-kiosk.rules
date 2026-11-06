@@ -1,0 +1,6 @@
+// No polkit action for kiosk: no network changes, no reboot, no pkexec.
+polkit.addRule(function(action, subject) {
+    if (subject.user == "kiosk") {
+        return polkit.Result.NO;
+    }
+});

@@ -1,0 +1,50 @@
+#!/bin/bash
+# GNOME Kiosk's script session runs this as ~/.local/bin/gnome-kiosk-script:
+# Firefox while a monitor is connected, restarted whenever it exits.
+set -euo pipefail
+
+# shellcheck source=jetson-kiosk.conf
+source /etc/jetson-kiosk.conf
+
+# Any connector, not DP by name: the names are the driver's, unverified here.
+connected() { grep -qx connected /sys/class/drm/card*-*/status 2>/dev/null; }
+
+delay=1
+while true; do
+	# No monitor, no Firefox.
+	until connected; do sleep 2; done
+
+	# MicroShift takes minutes after boot, and nobody would reload an error
+	# page. Anything but a 5xx (the router, no backend yet) will do.
+	until code=$(curl -ks -o /dev/null -w '%{http_code}' --max-time 5 "$KIOSK_URL") \
+			&& [[ $code != 5* ]]; do
+		sleep 5
+	done
+
+	started=$SECONDS
+	firefox --kiosk "$KIOSK_URL" &
+	firefox=$!
+
+	# Ten seconds unplugged closes Firefox; a cable wiggle does not.
+	unplugged=false gone=0
+	while kill -0 "$firefox" 2>/dev/null; do
+		sleep 2
+		if connected; then gone=0; else gone=$((gone + 1)); fi
+		if ((gone >= 5)); then
+			unplugged=true
+			kill "$firefox" 2>/dev/null || true
+			break
+		fi
+	done
+	wait "$firefox" || true
+
+	# Dead within a minute is a crash: back off, doubling up to 60 s. A long
+	# run or an unplug resets it.
+	if [[ $unplugged == false ]] && ((SECONDS - started < 60)); then
+		delay=$((delay * 2 > 60 ? 60 : delay * 2))
+		echo "Firefox exited after $((SECONDS - started)) s; next start in ${delay} s"
+	else
+		delay=1
+	fi
+	sleep "$delay"
+done

@@ -23,16 +23,6 @@ user --name=cloudlet --groups=wheel --iscrypted --password=@JETSON_PASSWORD_HASH
 sshkey --username=cloudlet "@JETSON_SSH_PUBKEY@"
 
 reboot --eject
-
-# Maps jetson-1 to 10.44.0.1 in /etc/hosts; adds jetson-1.cloudlet.local to the API cert.
-%post
-echo "10.44.0.1 jetson-1.cloudlet.local jetson-1" >> /etc/hosts
-cat > /etc/microshift/config.d/20-subject-alt-names.yaml <<'EOF'
-apiServer:
-  subjectAltNames:
-    - jetson-1.cloudlet.local
-EOF
-%end
 """
 
 [customizations.iso]

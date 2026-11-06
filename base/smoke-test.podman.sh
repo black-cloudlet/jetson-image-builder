@@ -33,6 +33,27 @@ if ! command -v jtop; then
 	exit 1
 fi
 
+# jtop installs its own unit, unchanged from the template, when it finds none at
+# this path. The template's binary path was wrong once, and the unit then
+# restarted forever.
+unit=/etc/systemd/system/jtop.service
+if [[ ! -f $unit || -L $unit ]]; then
+	echo "not a regular file: $unit"
+	ls -la /etc/systemd/system | grep -i jtop | sed 's/^/   /'
+	exit 1
+fi
+exe=$(sed -n 's/^ExecStart=\([^ ]*\).*/\1/p' "$unit")
+if [[ ! -x $exe ]]; then
+	echo "$unit runs '$exe', which is not executable:"
+	grep -n ExecStart "$unit" | sed 's/^/   /'
+	exit 1
+fi
+if [[ ! -L $wants/jtop.service ]]; then
+	echo "not enabled: jtop.service"
+	ls -la "$wants" | sed 's/^/   /'
+	exit 1
+fi
+
 echo "== edge manager agent =="
 rpm -qa 'flightctl*' | sort
 if [[ ! -L $wants/flightctl-agent.service ]]; then
@@ -49,5 +70,14 @@ for unit in flightctl-agent.service bootc-fetch-apply-updates.service; do
 		exit 1
 	fi
 done
+
+# Unenrolled, the agent is idle by design, and a failing required greenboot
+# check rolls every upgrade back. Without the guard the check waits 150 s.
+check=$(rpm -ql flightctl-agent | grep /greenboot/check/)
+if ! timeout 10 bash "$check" >/dev/null 2>&1; then
+	echo "$check fails on an unenrolled node; its head:"
+	head -5 "$check" | sed 's/^/   /'
+	exit 1
+fi
 
 echo "all checks passed"

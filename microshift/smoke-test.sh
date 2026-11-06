@@ -50,6 +50,14 @@ node=$(awk '$1 == "nodeIP:" { print $2 }' /etc/microshift/config.d/*.yaml)
 	|| fail "lo carries '$lo' ($nm) but nodeIP is '$node' (/etc/microshift/config.d)"
 echo "   nodeIP $node is on lo"
 
+echo "== split dns =="
+# dns=dnsmasq and the kubelet resolvConf are separate files; either alone breaks pod DNS.
+mode=$(NetworkManager --print-config | awk -F= '$1 == "dns" { print $2 }')
+[[ $mode == dnsmasq ]] || fail "NetworkManager dns is '$mode', expected dnsmasq"
+rc=$(awk '$1 == "resolvConf:" { print $2 }' /etc/microshift/config.d/*.yaml)
+[[ $rc == /run/NetworkManager/no-stub-resolv.conf ]] && grep -qaF "$rc" /usr/sbin/NetworkManager \
+	|| fail "kubelet resolvConf '$rc' (/etc/microshift/config.d) is not a file NetworkManager writes"
+
 echo "== nvidia runtime for cri-o =="
 # nvidia-ctk renames a .conf drop-in to .toml and still exits 0, so only a check
 # spelling the name notices.
@@ -72,9 +80,9 @@ echo "== gpu time slicing =="
 #
 # `oc patch --local` with an empty patch never contacts a server; it parses the
 # render and prints it back as JSON, which jq can then query.
-r=$(oc kustomize /etc/microshift/manifests |
+r=$(oc kustomize /usr/lib/microshift/manifests |
 	oc patch --local -f - --type=merge -p '{}' -o json | jq -s .) \
-	|| fail "does not render: /etc/microshift/manifests"
+	|| fail "does not render: /usr/lib/microshift/manifests"
 
 # Prefixed to the jq programs below: the device plugin's pod spec.
 P='def pod: .[] | select(.kind == "DaemonSet") | .spec.template.spec;'
@@ -132,5 +140,32 @@ while read -r img; do
 	[[ -f $cache/$fsha/manifest.json ]] || not_embedded "manifest image was not embedded: $img"
 	echo "   embedded: $img"
 done <<<"$images"
+
+echo "== embedded images pinned =="
+# From `crio config`, the merged drop-ins: catches a list replaced by a later
+# drop-in, a registry missing from it, and an upstream that moved registry.
+cfg=$(crio config) || fail "crio config failed; its stderr is above"
+mapfile -t pins < <(sed -n '/^[[:space:]]*pinned_images = \[/,/^[[:space:]]*\]/s/^[[:space:]]*"\(.*\)",$/\1/p' <<<"$cfg")
+(( ${#pins[@]} )) || fail "crio config pins no images:" \
+	"$(grep -n -A8 'pinned_images' <<<"$cfg")"
+# CRI-O's three pattern forms: *keyword*, prefix* and exact.
+pinned() {
+	local p
+	for p in "${pins[@]}"; do
+		case $p in
+		\**\*) [[ $1 == *"${p:1:${#p}-2}"* ]] ;;
+		*\*) [[ $1 == "${p%\*}"* ]] ;;
+		*) [[ $1 == "$p" ]] ;;
+		esac && return 0
+	done
+	return 1
+}
+unpinned=()
+while IFS=, read -r img sha; do
+	pinned "$img" || unpinned+=("$img")
+done < "$cache/mapping.txt"
+(( ${#unpinned[@]} == 0 )) || fail "embedded but not pinned by crio config" \
+	"(${pins[*]}), so kubelet may delete them: ${unpinned[*]}"
+echo "   pinned: ${pins[*]}"
 
 echo "all checks passed"

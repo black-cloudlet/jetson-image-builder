@@ -10,10 +10,10 @@
   value: --service-namespace=default
 - op: replace
   path: /spec/template/spec/containers/0/args/3
-  value: --service-namespace=external-secrets
+  value: --service-namespace=external-secrets-operator
 - op: test
   path: /spec/template/spec/containers/0/args/5
   value: --secret-namespace=default
 - op: replace
   path: /spec/template/spec/containers/0/args/5
-  value: --secret-namespace=external-secrets
+  value: --secret-namespace=external-secrets-operator
