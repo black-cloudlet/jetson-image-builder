@@ -110,7 +110,11 @@ digest, and each is pushed to GHCR on its own as `ghcr.io/black-cloudlet/ultron-
 | bound-images | `base/Containerfile.podman` | `ultron-bound-images` | the scripts and boot unit that embed and restore container images; `jtop`; the Edge Manager agent | yes (`python3-pip`, `rhacm` repo) |
 | kiosk | `kiosk/Containerfile` | `ultron-kiosk` | GDM, GNOME Kiosk, Firefox, the `kiosk` user | yes (AppStream) |
 | microshift | `microshift/Containerfile` | `ultron-microshift` | MicroShift, firewall, node networking, GPU device plugin, 9+ embedded images | yes (`rhocp` + `fast-datapath` repos) |
-| services | `services/Containerfile` | `ultron-services` | four kustomize roots applied by MicroShift, 7 embedded images | no RPMs |
+| services | `services/Containerfile` | `ultron-services`, and `ultron` | four kustomize roots applied by MicroShift, 7 embedded images | no RPMs |
+
+The top layer is the finished OS, so it is also pushed as plain **`ghcr.io/black-cloudlet/ultron`**,
+with the same tags. That is the name to mirror and boot. The ISO still installs
+`ultron-services` by digest, which is the same manifest.
 
 **Why a chain instead of one Containerfile:** rebuild cost. The microshift layer installs RPMs
 and pulls MicroShift's whole control plane (nine images); the services layer changes far more
@@ -444,7 +448,9 @@ strips `metacopy` and fails unless `podman info` reports `Native Overlay Diff:tr
 6. Report the layer's size as a `::notice`.
 7. Run the layer's **smoke test inside the built image** (`podman run -i … bash -s <
    smoke-test.sh`); a failure stops the chain before anything is pushed.
-8. Push under every tag and output the image pinned by digest for the next job.
+8. Push under every tag and output the image pinned by digest for the next job. With
+   `also-as` (only `services` sets it, to `ultron`), push the same tags under that second name
+   too, and warn if its digest differs.
 9. Unregister, even on failure.
 
 Every layer is published under these tags, all naming the same manifest:

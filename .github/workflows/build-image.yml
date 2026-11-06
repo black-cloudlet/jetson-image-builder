@@ -30,6 +30,12 @@ on:
           separated. All of them point at the same digest.
         type: string
         default: ""
+      also-as:
+        description: |
+          a second image name, ghcr.io/<owner>/<also-as>, pushed with the same
+          tags as the first. Empty: none.
+        type: string
+        default: ""
       runs-on:
         description: runner label; must be native aarch64
         type: string
@@ -107,6 +113,7 @@ jobs:
         id: meta
         env:
           EXTRA_TAGS: ${{ inputs.extra-tags }}
+          ALSO_AS: ${{ inputs.also-as }}
         run: |
           tag="$(date -u +%Y%m%d)-${GITHUB_SHA::8}"
           # Unquoted on purpose: splits on any whitespace, newlines included.
@@ -122,6 +129,10 @@ jobs:
               *[!A-Za-z0-9._-]*) echo "::error::not a usable image tag: ${t}"; exit 1 ;;
             esac
           done
+          case $ALSO_AS in
+            '') ;;
+            [a-z0-9]*[!a-z0-9._-]*|[!a-z0-9]*) echo "::error::not a usable image name: ${ALSO_AS}"; exit 1 ;;
+          esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
           echo "building $IMAGE with tags: $tags"
@@ -177,12 +188,15 @@ jobs:
 
       # Downstream layers consume the digest, not the tag. Every tag names the
       # same manifest, so the digest is taken from the first push and the rest
-      # only move a name onto it.
+      # only move a name onto it. The second name gets the same layers, already
+      # compressed, so its manifest should be byte-identical; a different digest
+      # is reported, not fatal, since nothing downstream builds on that name.
       - name: Push
         id: push
         env:
           TAG: ${{ steps.meta.outputs.tag }}
           TAGS: ${{ steps.meta.outputs.tags }}
+          ALSO_AS: ${{ inputs.also-as }}
         run: |
           podman push --digestfile=/tmp/digest "$IMAGE:$TAG"
           for t in $TAGS; do
@@ -190,6 +204,15 @@ jobs:
             podman push "$IMAGE:$t"
           done
           echo "image-ref=${IMAGE}@$(cat /tmp/digest)" >> "$GITHUB_OUTPUT"
+          if [ -n "$ALSO_AS" ]; then
+            also="${IMAGE%/*}/$ALSO_AS"
+            for t in $TAGS; do
+              podman push --digestfile=/tmp/also-digest "$IMAGE:$t" "docker://$also:$t"
+            done
+            [ "$(cat /tmp/also-digest)" = "$(cat /tmp/digest)" ] \
+              || echo "::warning::$also has digest $(cat /tmp/also-digest), $IMAGE has $(cat /tmp/digest)"
+            echo "::notice title=also published as::$also@$(cat /tmp/also-digest)"
+          fi
 
       - name: Unregister
         if: always()

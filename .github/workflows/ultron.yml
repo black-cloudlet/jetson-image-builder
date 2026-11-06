@@ -92,8 +92,10 @@ jobs:
       smoke-test: services/smoke-test.sh
       build-args: BASE_IMAGE=${{ needs.microshift.outputs.image-ref }}
       # Built FROM the microshift layer, so it carries that MicroShift version
-      # too — and this is the image a node actually boots and upgrades.
+      # too — and this is the image a node actually boots and upgrades, so it
+      # is also published under the project's plain name.
       extra-tags: stable 4.20
+      also-as: ultron
     secrets: inherit
     permissions: { contents: read, packages: write }
 

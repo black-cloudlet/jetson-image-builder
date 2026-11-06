@@ -2,7 +2,7 @@
 
 Provisioning and image pipeline for NVIDIA Jetson AGX Orin edge nodes running RHEL image mode
 (bootc) in a disconnected environment. The project is **Ultron**: images are
-`ultron-<layer>`, the ISO `ultron-<tag>.iso`. Read this whole file before touching anything.
+`ultron-<layer>`, the top one also plain `ultron`, the ISO `ultron-<tag>.iso`. Read this whole file before touching anything.
 
 **Two repos.** This one holds the image pipeline (`base/`, `microshift/`, `services/`,
 `.github/workflows/`). The flashing-station tooling (`mirror.sh`, `install-offline.sh`, the
@@ -487,7 +487,11 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `ghcr.io/<owner>/ultron-<name>`, output the digest-pinned ref, and report the
   layer size as a `::notice`. Tags: `<YYYYMMDD-sha8>`, `latest`, and `extra-tags` (`stable`
   on all five layers; `4.20` on the two with MicroShift, passed from the same lines as
-  `USHIFT_VER` so the tag cannot lie). Tags are validated before the build.
+  `USHIFT_VER` so the tag cannot lie). Tags are validated before the build. `also-as` pushes
+  the same tags under a second name: `services` is also `ghcr.io/<owner>/ultron`, the finished
+  OS under the project's name. Its digest should equal the first (same compressed layers); a
+  mismatch is a `::warning`, not a failure, since nothing builds on it. The ISO and the chain
+  use `ultron-services`.
   **What a node follows is not settled.** bib installs the services layer pinned by digest
   from GHCR, so `bootc upgrade` has nothing to re-resolve and could not reach it anyway.
   `ostreecontainer` has no `--target-imgref`. Pointing the origin at the air-gapped `stable`
