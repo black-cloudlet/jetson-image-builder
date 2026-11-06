@@ -1,7 +1,8 @@
 # CLAUDE.md — jetson-image-builder
 
 Provisioning and image pipeline for NVIDIA Jetson AGX Orin edge nodes running RHEL image mode
-(bootc) in a disconnected environment. Read this whole file before touching anything.
+(bootc) in a disconnected environment. The project is **Ultron**: images are
+`ultron-<layer>`, the ISO `ultron-<tag>.iso`. Read this whole file before touching anything.
 
 **Two repos.** This one holds the image pipeline (`base/`, `microshift/`, `services/`,
 `.github/workflows/`). The flashing-station tooling (`mirror.sh`, `install-offline.sh`, the
@@ -105,7 +106,7 @@ only. KServe was removed once before (`bba9d10`, reason unrecorded).
    - `base/Containerfile.base` republishes the pinned vendor image under our name, plus field
      tools (`tcpdump` and the like).
    - `base/Containerfile.podman` adds the physically-bound-images machinery and `jtop`.
-     Published as `jetson-orin-bootc-bound-images` from CI job `bound_images` (an underscore:
+     Published as `ultron-bound-images` from CI job `bound_images` (an underscore:
      `needs.bound-images` parses as a subtraction and resolves to nothing).
    - `kiosk/` adds GDM, GNOME Kiosk's script session, Firefox and the `kiosk` user. Shared,
      below the variant: nothing in it is about the cluster, so a service change never reinstalls
@@ -116,8 +117,8 @@ only. KServe was removed once before (`bba9d10`, reason unrecorded).
      with every image they name embedded.
    Service images sit **above** the variant layer so changing one does not re-run the
    MicroShift install and re-pull its nine images. Each layer is pushed as
-   `jetson-orin-bootc-<name>` and the next builds on its **digest**. CI is two reusable
-   workflows (`build-image.yml`, `build-iso.yml`) plus `build-microshift.yml`, chaining base →
+   `ultron-<name>` and the next builds on its **digest**. CI is two reusable
+   workflows (`build-image.yml`, `build-iso.yml`) plus `ultron.yml`, chaining base →
    bound-images → kiosk → microshift → services → ISO. The build context is the repo root. Every
    layer registers with subscription-manager, even the one that installs nothing: one code path.
 8. **NVIDIA BSP download stays manual** (documented in `README.md`). Scripting it was fragile.
@@ -464,7 +465,7 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   40 GiB xfs root, **no swap**, and **~16.5 GiB left free for LVMS** (fill the VG and the
   cluster has no dynamic PVs). Root locked; user `cloudlet` in `wheel` from
   `@JETSON_SSH_PUBKEY@`/`@JETSON_PASSWORD_HASH@`; `reboot --eject`. ISO label
-  `JETSON_ORIN_BOOTC`. Address and hostname are baked in, so two devices from
+  `ULTRON`. Address and hostname are baked in, so two devices from
   one ISO collide. No `%post`: the extra API SAN and the `/etc/hosts` entry were removed, so
   the laptop reaches 6443 through an SSH tunnel with the loopback kubeconfig.
 - **Node IP on `lo`** (`microshift/stable-microshift.nmconnection`,
@@ -483,7 +484,7 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   `/run/NetworkManager/no-stub-resolv.conf`. Unverified on hardware.
 - `.github/workflows/build-image.yml` — **reusable**: register, bind storage for native
   overlay, write the pull secret, build, run the smoke test inside the result, push
-  `ghcr.io/<owner>/jetson-orin-bootc-<name>`, output the digest-pinned ref, and report the
+  `ghcr.io/<owner>/ultron-<name>`, output the digest-pinned ref, and report the
   layer size as a `::notice`. Tags: `<YYYYMMDD-sha8>`, `latest`, and `extra-tags` (`stable`
   on all five layers; `4.20` on the two with MicroShift, passed from the same lines as
   `USHIFT_VER` so the tag cannot lie). Tags are validated before the build.
@@ -504,7 +505,7 @@ Both are idempotent and have been run end to end: station provisioned, devkit QS
   implanted md5, so "Test this media" cannot verify the stick; unused, not restored. Upload
   the `*.iso` alone (no checksum file) at zip `compression-level: 9`, the maintainer's call; it is
   mostly gzip'd layers and squashfs, so the saving is small and the upload slower.
-- `.github/workflows/build-microshift.yml` — the only caller, on push to `main` under
+- `.github/workflows/ultron.yml` — the only caller, on push to `main` under
   `base/**`, `kiosk/**`, `microshift/**`, `services/**`, `config.toml` or the workflows, and on
   `workflow_dispatch`. **Nothing runs on a pull request.**
 
@@ -525,7 +526,7 @@ hardware.
 
 ## Next step: validate on hardware, then the app services
 
-1. Dispatch `build-microshift.yml`, `dd` the ISO, boot the devkit (QSPI from R36.5.x). Check
+1. Dispatch `ultron.yml`, `dd` the ISO, boot the devkit (QSPI from R36.5.x). Check
    `bootc status` (expect a digest-pinned GHCR origin, which cannot upgrade), `lsmod | grep
    nvgpu`, `nvidia-ctk cdi list` → `nvidia.com/gpu=all`, a GPU container, `systemctl
    is-enabled bootc-fetch-apply-updates.timer`, whether `jtop` works, and that
@@ -649,7 +650,7 @@ the frontend's video codec, preview size and on-screen keyboard.
 
 **Git / delivery.** Develop on the session's branch, commit with a message that says *why*,
 push, and open a PR only when asked. Always state which files changed. Nothing runs CI on a PR,
-so a branch is validated by dispatching `build-microshift.yml` against it; a claim that
+so a branch is validated by dispatching `ultron.yml` against it; a claim that
 something is tested should say whether that means locally or dispatched.
 
 ## Quick reference
@@ -667,21 +668,21 @@ cd /opt/nvidia/Linux_for_Tegra && sudo ./flash.sh p3737-0000-p3701-0000-qspi ext
 
 # Local image build on a subscribed RHEL 9 aarch64 box, from the repo root. Each layer FROM the
 # one before it; the workflow passes BASE_IMAGE as a digest.
-sudo podman build -f base/Containerfile.base     -t localhost/jetson-base:dev .
-sudo podman build -f base/Containerfile.podman   -t localhost/jetson-podman:dev \
-    --build-arg BASE_IMAGE=localhost/jetson-base:dev .
+sudo podman build -f base/Containerfile.base     -t localhost/ultron-base:dev .
+sudo podman build -f base/Containerfile.podman   -t localhost/ultron-bound-images:dev \
+    --build-arg BASE_IMAGE=localhost/ultron-base:dev .
 openssl passwd -6 > /tmp/kiosk-hash   # the kiosk login's password
-sudo podman build -f kiosk/Containerfile         -t localhost/jetson-kiosk:dev \
+sudo podman build -f kiosk/Containerfile         -t localhost/ultron-kiosk:dev \
     --secret id=kiosk_password_hash,src=/tmp/kiosk-hash \
-    --build-arg BASE_IMAGE=localhost/jetson-podman:dev .
-sudo podman build -f microshift/Containerfile    -t localhost/jetson-microshift:dev \
+    --build-arg BASE_IMAGE=localhost/ultron-bound-images:dev .
+sudo podman build -f microshift/Containerfile    -t localhost/ultron-microshift:dev \
     --secret id=pullsecret,src=$HOME/pull-secret.json \
-    --build-arg BASE_IMAGE=localhost/jetson-kiosk:dev .
-sudo podman build -f services/Containerfile      -t localhost/jetson-orin-bootc:dev \
+    --build-arg BASE_IMAGE=localhost/ultron-kiosk:dev .
+sudo podman build -f services/Containerfile      -t localhost/ultron-services:dev \
     --secret id=pullsecret,src=$HOME/pull-secret.json \
-    --build-arg BASE_IMAGE=localhost/jetson-microshift:dev .
+    --build-arg BASE_IMAGE=localhost/ultron-microshift:dev .
 # Smoke tests are fed on stdin, the same way the workflow runs them
-podman run --rm -i localhost/jetson-orin-bootc:dev bash -s < services/smoke-test.sh
+podman run --rm -i localhost/ultron-services:dev bash -s < services/smoke-test.sh
 
 # ISO from the top of the chain
 sed -e "s|@JETSON_SSH_PUBKEY@|$(cat ~/.ssh/id_ed25519.pub)|" \
@@ -691,7 +692,7 @@ sudo podman run --rm --privileged --pull=newer --security-opt label=type:unconfi
   -v /tmp/config.toml:/config.toml:ro -v ./output:/output \
   -v /var/lib/containers/storage:/var/lib/containers/storage \
   registry.redhat.io/rhel9/bootc-image-builder:latest \
-  --type anaconda-iso --config /config.toml localhost/jetson-orin-bootc:dev
+  --type anaconda-iso --config /config.toml localhost/ultron-services:dev
 # -> output/bootiso/install.iso
 
 # On the device

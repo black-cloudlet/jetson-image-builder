@@ -2,7 +2,7 @@
 # builds on the previous one's digest, so a change to a service image does not
 # re-pull MicroShift's control plane and vice versa. The ISO is built from the
 # top of the chain, which is services, not microshift.
-name: microshift image + installer ISO
+name: ultron images + installer ISO
 
 on:
   push:
@@ -13,7 +13,7 @@ on:
       - microshift/**
       - services/**
       - config.toml
-      - .github/workflows/build-microshift.yml
+      - .github/workflows/ultron.yml
       - .github/workflows/build-image.yml
       - .github/workflows/build-iso.yml
   workflow_dispatch:
@@ -105,7 +105,6 @@ jobs:
     with:
       image-ref: ${{ needs.services.outputs.image-ref }}
       config: config.toml
-      name: microshift
       tag: ${{ needs.services.outputs.tag }}
     secrets: inherit
     permissions: { contents: read, packages: read }
