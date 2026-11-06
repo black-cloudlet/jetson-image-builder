@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Container tools
-        run: dnf -y install podman skopeo jq
+        run: dnf -y install podman jq
 
       # UBI's default policy demands signatures for registry.redhat.io content.
       - name: Relax image signature policy in the builder

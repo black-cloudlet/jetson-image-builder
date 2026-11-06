@@ -424,7 +424,7 @@ Seven images come from the services layer today: cert-manager ×3, External Secr
 
 GitHub has no RHEL runner, so each job runs on **`ubuntu-24.04-arm`** (native arm64; emulating
 arm64 is not viable) **inside a `registry.access.redhat.com/ubi9/ubi` container**. The container
-supplies RHEL's `podman`, `buildah` and `skopeo`, and a `subscription-manager register` inside it
+supplies RHEL's `podman`, and a `subscription-manager register` inside it
 supplies entitlement for the RHEL and OpenShift repos.
 
 The runner's `/mnt` disk is mounted as `/scratch`, and container storage, `/var/tmp` and the ISO
@@ -435,7 +435,7 @@ strips `metacopy` and fails unless `podman info` reports `Native Overlay Diff:tr
 
 ### One layer (`build-image.yml`)
 
-1. Install podman/buildah/skopeo/jq in the UBI container and register with Red Hat.
+1. Install podman and jq in the UBI container and register with Red Hat.
 2. Move container storage onto `/scratch`.
 3. Compute tags and validate them *before* the build.
 4. Log in to GHCR and write the OpenShift pull secret (build-time only, never in the image).
